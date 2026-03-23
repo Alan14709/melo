@@ -1,0 +1,77 @@
+{
+  "name": "melo",
+  "version": "0.1.0",
+  "description": "Tu musica, sin limites",
+  "main": "main.js",
+  "scripts": {
+    "dev": "fuser -k 5173/tcp; concurrently \"vite\" \"wait-on tcp:5173 && electron . --no-sandbox\"",
+    "build": "vite build && electron-builder",
+    "start": "electron . --no-sandbox",
+    "postinstall": "electron-builder install-app-deps",
+    "release:linux": "vite build && electron-builder --linux",
+    "release:mac": "vite build && electron-builder --mac",
+    "release:win": "vite build && electron-builder --win",
+    "release:all": "vite build && electron-builder -mwl",
+    "release:publish": "vite build && electron-builder --publish always",
+    "generate-icons": "electron-icon-builder --input=assets/icon.png --output=assets"
+  },
+  "dependencies": {
+    "discord-rpc": "^4.0.1",
+    "electron-store": "^8.1.0",
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.0.0",
+    "cmdk": "^0.2.0",
+    "concurrently": "^8.0.0",
+    "cross-env": "^7.0.3",
+    "electron": "https://github.com/castlabs/electron-releases#v40.7.0+wvcus",
+    "electron-builder": "^24.0.0",
+    "electron-icon-builder": "^2.0.1",
+    "lucide-react": "^0.383.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "vite": "^5.0.0",
+    "wait-on": "^7.0.0",
+    "zustand": "^4.5.0"
+  },
+  "build": {
+    "appId": "com.melo.app",
+    "productName": "Melo",
+    "copyright": "Copyright 2025 Melo",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "alan-lemus",
+      "repo": "melo",
+      "releaseType": "release"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Audio",
+      "icon": "assets/icon.png"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.music",
+      "icon": "assets/icon.icns"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
