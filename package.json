@@ -48,6 +48,9 @@
       "repo": "melo",
       "releaseType": "release"
     },
+    "electronDownload": {
+      "mirror": "https://github.com/castlabs/electron-releases/releases/download/"
+    },
     "linux": {
       "target": [
         "AppImage",
