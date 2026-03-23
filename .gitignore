@@ -8,3 +8,7 @@ out/
 *.p8
 *.key
 Thumbs.db
+assets/icons/
+assets/mac/
+assets/win/
+assets/icon-*x*.png

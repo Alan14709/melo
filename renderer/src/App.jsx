@@ -42,10 +42,9 @@ export default function App() {
       if (!data?.title) return
       setTrack({
         title: data.title,
-        artist: data.artist,
-        album: data.album,
-        artwork: data.artwork,
-        serviceId: data.serviceId,
+        artist: data.artist ?? null,
+        album: data.album ?? null,
+        artwork: data.artwork ?? null,
       })
       setPlaying(data.state === 'playing')
 

@@ -9,6 +9,7 @@
   "main": "main.js",
   "scripts": {
     "dev": "fuser -k 5173/tcp; concurrently \"vite\" \"wait-on tcp:5173 && electron . --no-sandbox\"",
+    "prebuild": "node -e \"require('fs').mkdirSync('dist/renderer', {recursive:true})\"",
     "build": "vite build && electron-builder",
     "start": "electron . --no-sandbox",
     "postinstall": "electron-builder install-app-deps",
@@ -16,8 +17,8 @@
     "release:mac": "vite build && electron-builder --mac",
     "release:win": "vite build && electron-builder --win",
     "release:all": "vite build && electron-builder -mwl",
-    "release:publish": "vite build && electron-builder --publish always",
-    "generate-icons": "electron-icon-builder --input=assets/icon.png --output=assets"
+    "prerelease:publish": "node -e \"require('fs').mkdirSync('dist/renderer', {recursive:true})\"",
+    "release:publish": "vite build && electron-builder --publish always"
   },
   "dependencies": {
     "discord-rpc": "^4.0.1",
@@ -31,7 +32,6 @@
     "cross-env": "^7.0.3",
     "electron": "https://github.com/castlabs/electron-releases#v40.7.0+wvcus",
     "electron-builder": "^24.0.0",
-    "electron-icon-builder": "^2.0.1",
     "lucide-react": "^0.383.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -43,15 +43,28 @@
     "appId": "com.melo.app",
     "productName": "Melo",
     "copyright": "Copyright 2025 Melo",
+    "files": [
+      "main.js",
+      "preload.js",
+      "dist/renderer/**/*",
+      "services/**/*",
+      "integrations/**/*",
+      "assets/icon.png",
+      "assets/icon.ico",
+      "electron-flags.json",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "extraResources": [],
     "directories": {
       "output": "dist-electron"
     },
-   "publish": {
-  "provider": "github",
-  "owner": "Alan14709",
-  "repo": "melo",
-  "releaseType": "release"
-},
+    "publish": {
+      "provider": "github",
+      "owner": "Alan14709",
+      "repo": "melo",
+      "releaseType": "release"
+    },
     "electronDownload": {
       "mirror": "https://github.com/castlabs/electron-releases/releases/download/v"
     },
@@ -69,7 +82,7 @@
         "dmg"
       ],
       "category": "public.app-category.music",
-      "icon": "assets/icon.icns"
+      "icon": "assets/icon.png"
     },
     "win": {
       "target": [

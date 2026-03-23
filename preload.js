@@ -44,6 +44,9 @@ contextBridge.exposeInMainWorld('melo', {
   playerAction: (action) => {
     ipcRenderer.send('player:action', action)
   },
+  setVolume: (vol) => {
+    ipcRenderer.send('player:volume', vol)
+  },
   switchService: (serviceId, url, service) => {
     ipcRenderer.send('service:switch', { serviceId, url, service })
   },

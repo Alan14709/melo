@@ -140,6 +140,20 @@ function createMainWindow() {
     mainWindow.webContents.openDevTools({ mode: 'detach' })
   }
 
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error('Failed to load:', errorCode, errorDescription, validatedURL)
+    if (app.isPackaged) {
+      setTimeout(() => {
+        if (!mainWindow || mainWindow.isDestroyed()) return
+        mainWindow.loadFile(path.join(__dirname, 'dist/renderer/index.html')).catch(() => {})
+      }, 1000)
+    }
+  })
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('Render process gone:', details.reason)
+  })
+
   mainWindow.on('resize', applyViewBounds)
 
   mainWindow.on('closed', () => {
@@ -677,6 +691,24 @@ function registerIpcHandlers() {
     runPlayerAction(action).catch(() => {})
   })
 
+  ipcMain.on('player:volume', (_e, volume) => {
+    if (!activeView?.webContents) return
+    if (activeView.webContents.isDestroyed()) return
+
+    const safeVolume = Math.max(0, Math.min(1, Number(volume)))
+
+    activeView.webContents.executeJavaScript(`
+      (() => {
+        const media = document.querySelector('video, audio')
+        if (!media) return false
+        media.volume = ${safeVolume}
+        return true
+      })()
+    `).catch(() => {})
+
+    activeView.webContents.setAudioMuted(safeVolume === 0)
+  })
+
   ipcMain.on('mini:toggle', () => {
     toggleMiniPlayer()
   })
@@ -898,6 +930,17 @@ app.whenReady().then(async () => {
     lastfm.configure(lfmConfig)
   }
 
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https: wss:"
+        ]
+      }
+    })
+  })
+
   createMainWindow()
   registerIpcHandlers()
   registerGlobalShortcuts()
@@ -915,5 +958,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
+  if (BrowserWindow.getAllWindows().length === 0) {
+    createMainWindow()
+  }
 })

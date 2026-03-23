@@ -6,9 +6,14 @@ import './styles/globals.css'
 import './styles/themes.css'
 
 const isMini = window.location.hash === '#mini'
+const root = document.getElementById('root')
 
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    {isMini ? <MiniPlayer /> : <App />}
-  </React.StrictMode>
-)
+if (!root) {
+  console.error('No se encontro el elemento root')
+} else {
+  ReactDOM.createRoot(root).render(
+    <React.StrictMode>
+      {isMini ? <MiniPlayer /> : <App />}
+    </React.StrictMode>
+  )
+}
