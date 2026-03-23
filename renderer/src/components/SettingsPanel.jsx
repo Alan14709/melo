@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import { SERVICES } from '../../../services/registry'
+import { version } from '../../../package.json'
 import { usePlayerStore } from '../store/usePlayerStore'
 import SettingsRow from './SettingsRow.jsx'
 
@@ -308,7 +309,7 @@ export default function SettingsPanel({ isOpen, onClose }) {
 
           <section>
             <h3>ACTUALIZACIONES <span className="badge-version">v1.0</span></h3>
-            <SettingsRow label="Version" type="text" value="0.1.0" />
+            <SettingsRow label="Version" type="text" value={`v${version}`} />
             <SettingsRow label="Auto-update" type="toggle" value={autoUpdateEnabled} onChange={handleAutoUpdateToggle} />
           </section>
 
