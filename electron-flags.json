@@ -2,6 +2,9 @@
   "linux": [
     "--no-sandbox",
     "--disable-setuid-sandbox",
-    "--disable-dev-shm-usage"
-  ]
+    "--enable-unsafe-swiftshader",
+    "--in-process-gpu"
+  ],
+  "darwin": [],
+  "win32": []
 }

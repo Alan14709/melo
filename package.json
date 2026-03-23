@@ -1,6 +1,6 @@
 {
   "name": "melo",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Tu musica, sin limites",
   "author": {
     "name": "Alan Lemus",
@@ -40,6 +40,7 @@
     "zustand": "^4.5.0"
   },
   "build": {
+    "asar": false,
     "appId": "com.melo.app",
     "productName": "Melo",
     "copyright": "Copyright 2025 Melo",
@@ -56,6 +57,12 @@
       "package.json"
     ],
     "extraResources": [],
+    "extraFiles": [
+      {
+        "from": "packaging/melo-wrapper.sh",
+        "to": "melo-wrapper"
+      }
+    ],
     "directories": {
       "output": "dist-electron"
     },
@@ -69,25 +76,23 @@
       "mirror": "https://github.com/castlabs/electron-releases/releases/download/v"
     },
     "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
+      "target": ["AppImage", "deb"],
       "category": "Audio",
       "icon": "assets/icon.png",
+      "executableArgs": ["--no-sandbox", "--disable-setuid-sandbox"],
       "maintainer": "Alan Lemus <alan.lemus.dev@gmail.com>"
     },
+    "deb": {
+      "afterInstall": "packaging/deb-after-install.sh",
+      "afterRemove": "packaging/deb-after-remove.sh"
+    },
     "mac": {
-      "target": [
-        "dmg"
-      ],
+      "target": ["dmg"],
       "category": "public.app-category.music",
       "icon": "assets/icon.png"
     },
     "win": {
-      "target": [
-        "nsis"
-      ],
+      "target": ["nsis"],
       "icon": "assets/icon.ico"
     },
     "nsis": {

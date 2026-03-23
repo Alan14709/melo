@@ -29,10 +29,13 @@ app.commandLine.appendSwitch(
 if (process.platform === 'linux') {
   app.commandLine.appendSwitch('no-sandbox')
   app.commandLine.appendSwitch('disable-setuid-sandbox')
-  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('enable-unsafe-swiftshader')
+  app.commandLine.appendSwitch('disable-gpu-sandbox')
   app.commandLine.appendSwitch('in-process-gpu')
-  app.commandLine.appendSwitch('use-gl', 'swiftshader')
-  app.commandLine.appendSwitch('use-angle', 'swiftshader')
+  app.commandLine.appendSwitch(
+    'disable-features',
+    'VizDisplayCompositor,UseSkiaRenderer'
+  )
 }
 
 app.disableHardwareAcceleration()
@@ -118,7 +121,7 @@ function applyViewBounds() {
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
-    icon: path.join(__dirname, 'logo.png'),
+    icon: path.join(__dirname, 'assets', 'icon.png'),
     width: 1200,
     height: 750,
     minWidth: 900,
@@ -126,15 +129,25 @@ function createMainWindow() {
     frame: false,
     titleBarStyle: 'hidden',
     backgroundColor: '#0d0d0d',
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false,
+      webSecurity: true,
     },
   })
 
+  // Mostrar cuando el renderer este listo para evitar blanco/parpadeo en prod.
+  mainWindow.once('ready-to-show', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show()
+  })
+
   if (app.isPackaged) {
-    mainWindow.loadFile(path.join(__dirname, 'dist/renderer/index.html'))
+    mainWindow.loadFile(
+      path.join(__dirname, 'dist/renderer/index.html')
+    )
   } else {
     mainWindow.loadURL('http://localhost:5173')
     mainWindow.webContents.openDevTools({ mode: 'detach' })
@@ -300,6 +313,7 @@ function createServiceView(serviceId, url) {
       partition: `persist:melo-${serviceId}`,
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false,
       plugins: true,
       allowRunningInsecureContent: false,
     },
@@ -962,3 +976,8 @@ app.on('activate', () => {
     createMainWindow()
   }
 })
+
+// En createMainWindow(), justo antes del if (app.isPackaged)
+console.log('__dirname:', __dirname)
+console.log('preload path:', path.join(__dirname, 'preload.js'))
+console.log('renderer path:', path.join(__dirname, 'dist/renderer/index.html'))
