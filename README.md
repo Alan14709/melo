@@ -1,5 +1,9 @@
 # Melo
 
+![Version](https://img.shields.io/github/v/release/Alan14709/melo?label=version)
+![Downloads](https://img.shields.io/github/downloads/Alan14709/melo/total)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
+
 Tu musica, sin limites.
 
 Cliente de escritorio universal para servicios de streaming.
@@ -15,6 +19,18 @@ Apple Music, Spotify, YouTube Music, Tidal y Deezer en una sola app.
 - Mini player flotante
 - Temas: Dark, OLED, Light, Nord, Catppuccin y Custom
 - Auto-update
+
+## Descarga
+
+Descarga la ultima version desde:
+https://github.com/Alan14709/melo/releases/latest
+
+Linux:   Melo-*.AppImage o melo_*_amd64.deb
+macOS:   Melo-*.dmg
+Windows: Melo-*-setup.exe
+
+NOTA: Si tienes v1.0.0 instalada, actualiza a v1.0.1 inmediatamente.
+La version anterior tiene errores graves.
 
 ## Instalacion Por Plataforma
 
