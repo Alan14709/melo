@@ -2,6 +2,10 @@
   "name": "melo",
   "version": "0.1.0",
   "description": "Tu musica, sin limites",
+  "author": {
+    "name": "Alan Lemus",
+    "email": "alan.lemus.dev@gmail.com"
+  },
   "main": "main.js",
   "scripts": {
     "dev": "fuser -k 5173/tcp; concurrently \"vite\" \"wait-on tcp:5173 && electron . --no-sandbox\"",
@@ -57,7 +61,8 @@
         "deb"
       ],
       "category": "Audio",
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.png",
+      "maintainer": "Alan Lemus <alan.lemus.dev@gmail.com>"
     },
     "mac": {
       "target": [
