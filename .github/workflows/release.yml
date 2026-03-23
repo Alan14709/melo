@@ -10,6 +10,8 @@ permissions:
 
 jobs:
   release:
+    permissions:
+      contents: write
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -30,6 +32,7 @@ jobs:
 
       - name: Build and release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Usa RELEASE_TOKEN (PAT) si existe; si no, cae en github.token.
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN != '' && secrets.RELEASE_TOKEN || github.token }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npm run release:publish
