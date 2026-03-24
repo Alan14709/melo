@@ -1,8 +1,9 @@
-import React, { useRef, useState } from 'react'
+import React, { memo, useEffect, useRef, useState } from 'react'
 import { Music, Volume2, VolumeX, Volume1 } from 'lucide-react'
 import { usePlayerStore } from '../store/usePlayerStore'
+import { Slider } from './Slider.jsx'
 
-function AudioVisualizer({ isPlaying, color }) {
+const AudioVisualizer = memo(function AudioVisualizer({ isPlaying, color }) {
   const BARS = 28
   return (
     <div className="visualizer" style={{ '--bar-color': color }}>
@@ -18,70 +19,118 @@ function AudioVisualizer({ isPlaying, color }) {
       ))}
     </div>
   )
-}
+})
 
-function VolumeControl({ color }) {
+const ProgressBar = memo(function ProgressBar({ color }) {
+  const [position, setPosition] = useState(0)
+  const [current, setCurrent] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const isSeekingRef = useRef(false)
+
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      if (isSeekingRef.current) return
+      try {
+        const result = await window.melo.getProgress()
+        if (result?.duration > 0) {
+          setCurrent(result.position)
+          setDuration(result.duration)
+          setPosition(result.position / result.duration)
+        }
+      } catch (_) {}
+    }, 1000)
+
+    return () => clearInterval(interval)
+  }, [])
+
+  const fmt = (s) => {
+    if (!s || Number.isNaN(s)) return '0:00'
+    const m = Math.floor(s / 60)
+    const sec = Math.floor(s % 60)
+    return `${m}:${sec.toString().padStart(2, '0')}`
+  }
+
+  return (
+    <div className="progress-row no-drag">
+      <span className="progress-time">{fmt(current)}</span>
+      <Slider
+        value={position}
+        color={color}
+        onChange={(val) => {
+          isSeekingRef.current = true
+          setPosition(val)
+          setCurrent(val * duration)
+        }}
+        onChangeEnd={(val) => {
+          isSeekingRef.current = false
+          if (duration > 0) window.melo.seek(val * duration)
+        }}
+        formatTooltip={(val) => fmt(val * duration)}
+      />
+      <span className="progress-time">{fmt(duration)}</span>
+    </div>
+  )
+})
+
+const VolumeControl = memo(function VolumeControl({ color }) {
+  const { volumeLevel, setVolumeLevel } = usePlayerStore()
   const [volume, setVolume] = useState(1)
   const [muted, setMuted] = useState(false)
-  const prevVolume = useRef(1)
+  const prevVol = useRef(1)
 
-  const applyVolume = (val) => {
+  useEffect(() => {
+    setVolume(volumeLevel)
+    setMuted(volumeLevel === 0)
+  }, [volumeLevel])
+
+  const updateVolume = (val) => {
+    setVolume(val)
+    setVolumeLevel(val)
     window.melo.setVolume(val)
+    window.melo.saveSettings('volumeLevel', val).catch(() => {})
   }
 
   const handleMute = () => {
     if (muted) {
-      const restored = prevVolume.current || 1
-      setVolume(restored)
+      updateVolume(prevVol.current || 1)
       setMuted(false)
-      applyVolume(restored)
     } else {
-      prevVolume.current = volume
-      setVolume(0)
+      prevVol.current = volume
+      updateVolume(0)
       setMuted(true)
-      applyVolume(0)
     }
   }
 
-  const handleVolumeChange = (e) => {
-    const val = parseFloat(e.target.value)
-    setVolume(val)
-    setMuted(val === 0)
-    applyVolume(val)
-  }
-
-  const VolumeIcon = muted || volume === 0
+  const Icon = muted || volume === 0
     ? VolumeX
     : volume < 0.5
       ? Volume1
       : Volume2
 
   return (
-    <div className="volume-control">
+    <div className="volume-control no-drag">
       <button
         className="volume-btn"
         onClick={handleMute}
         title={muted ? 'Activar sonido' : 'Silenciar'}
       >
-        <VolumeIcon size={15} />
+        <Icon size={14} />
       </button>
-      <div className="volume-slider-wrapper">
-        <input
-          type="range"
-          className="volume-slider"
-          min={0}
-          max={1}
-          step={0.01}
-          value={volume}
-          onChange={handleVolumeChange}
-          style={{ '--accent': color, '--volume': volume }}
-        />
-      </div>
+      <Slider
+        value={muted ? 0 : volume}
+        color={color}
+        className="volume-slider-component"
+        onChange={(val) => {
+          updateVolume(val)
+          setMuted(val === 0)
+        }}
+        formatTooltip={(val) => Math.round(val * 100) + '%'}
+      />
     </div>
   )
-}
+})
 
-export default function PlayerBar() {
+function PlayerBar() {
   const {
     currentTrack,
     isPlaying,
@@ -93,13 +142,12 @@ export default function PlayerBar() {
 
   return (
     <div className="playerbar">
-      {/* Izquierda: Artwork + Info */}
       <div className="playerbar-left">
         <div className="playerbar-artwork-wrapper">
           {currentTrack?.artwork ? (
             <img
               src={currentTrack.artwork}
-              className={`playerbar-artwork ${isPlaying ? 'spinning' : ''}`}
+              className={`playerbar-artwork ${currentTrack?.title && isPlaying ? 'spinning' : ''}`}
               alt="artwork"
             />
           ) : (
@@ -119,12 +167,13 @@ export default function PlayerBar() {
         </div>
       </div>
 
-      {/* Centro: Visualizador */}
       <div className="playerbar-center">
-        <AudioVisualizer isPlaying={isPlaying} color={color} />
+        <div className="playerbar-center-stack">
+          <AudioVisualizer isPlaying={isPlaying} color={color} />
+          <ProgressBar color={color} />
+        </div>
       </div>
 
-      {/* Derecha: Volumen + Badge */}
       <div className="playerbar-right">
         <VolumeControl color={color} />
         {activeServiceName && (
@@ -137,3 +186,5 @@ export default function PlayerBar() {
     </div>
   )
 }
+
+export default memo(PlayerBar)

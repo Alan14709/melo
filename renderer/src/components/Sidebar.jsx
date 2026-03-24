@@ -13,7 +13,10 @@ export default function Sidebar() {
   const list = Object.values(SERVICES)
 
   const handleServiceClick = (service) => {
-    if (service.id === activeServiceId) return
+    if (service.id === activeServiceId) {
+      if (currentView === 'stats') setView('player')
+      return
+    }
 
     window.melo.switchService(service.id, service.url, service)
     setActiveService(service.id, service.color, service.name)

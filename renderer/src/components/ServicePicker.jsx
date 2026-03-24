@@ -19,10 +19,28 @@ export default function ServicePicker({ onSelect }) {
   }, [setConnectedServices])
 
   return (
-    <main className="picker-screen">
-      <h1 className="picker-logo">melo</h1>
-      <p className="picker-tagline">tu musica, sin limites</p>
-      <section className="picker-grid">
+    <div className="service-picker drag-region">
+      <div className="picker-window-controls no-drag">
+        <button
+          className="window-btn window-btn-close"
+          onClick={() => window.melo.windowAction('close')}
+        />
+        <button
+          className="window-btn window-btn-minimize"
+          onClick={() => window.melo.windowAction('minimize')}
+        />
+        <button
+          className="window-btn window-btn-maximize"
+          onClick={() => window.melo.windowAction('maximize-toggle')}
+        />
+      </div>
+
+      <div className="picker-header no-drag">
+        <h1 className="melo-logo">melo</h1>
+        <p className="melo-tagline">tu musica, sin limites</p>
+      </div>
+
+      <div className="services-grid no-drag">
         {services.map((service, index) => (
           <ServiceCard
             key={service.id}
@@ -32,7 +50,7 @@ export default function ServicePicker({ onSelect }) {
             isConnected={connectedIds.includes(service.id)}
           />
         ))}
-      </section>
-    </main>
+      </div>
+    </div>
   )
 }

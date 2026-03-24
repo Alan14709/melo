@@ -25,7 +25,7 @@ export default function ServiceCard({ service, onClick, delayMs = 0, isConnected
 
   return (
     <button
-      className="service-card"
+      className="service-card no-drag"
       onClick={onClick}
       style={{ '--service-color': service.color, animationDelay: `${delayMs}ms` }}
     >

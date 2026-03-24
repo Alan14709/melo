@@ -8,6 +8,10 @@ const {
   Notification,
   session,
   shell,
+  Tray,
+  Menu,
+  nativeImage,
+  net,
 } = require('electron')
 const path = require('path')
 const fs = require('fs')
@@ -61,10 +65,70 @@ const store = new Store()
 const history = new Store({ name: 'history' })
 
 let miniWindow = null
+let tray = null
+let trayCurrentTrack = null
+let lastTrayTrackId = null
+let isQuitting = false
 
 let lastScrobbled = null
 let scrobbleTimeout = null
-let lastTracked = null
+let currentTrackStart = null
+let currentTrackData = null
+let currentVolumeLevel = Math.max(0, Math.min(1, Number(store.get('volumeLevel', 1))))
+let sleepTimer = null
+let sleepFadeInterval = null
+let sleepAfterSongAnchor = null
+const lastMediaSignatureByService = new Map()
+let processMetricsTimer = null
+let networkStatusTimer = null
+let isOnline = true
+let isCleaningUp = false
+let isExecutingScript = false
+const DEBUG_PLAYER = process.env.MELO_DEBUG_PLAYER === '1' || !app.isPackaged
+
+const PLAYER_STATE = {
+  NOT_LOADED: 'NOT_LOADED',
+  LOADING: 'LOADING',
+  READY: 'READY',
+  ERROR: 'ERROR',
+}
+
+const playerController = {
+  state: PLAYER_STATE.NOT_LOADED,
+  activeServiceId: null,
+  queue: Promise.resolve(),
+
+  log(...args) {
+    if (DEBUG_PLAYER) {
+      console.log('[player]', ...args)
+    }
+  },
+
+  setState(nextState, reason = '') {
+    if (this.state === nextState) return
+    this.state = nextState
+    this.log('state ->', nextState, reason)
+  },
+
+  canExecute(requireReady = true) {
+    return !requireReady || this.state === PLAYER_STATE.READY
+  },
+
+  enqueue(task) {
+    this.queue = this.queue
+      .then(task)
+      .catch((err) => {
+        this.log('queue error:', err?.message || err)
+      })
+    return this.queue
+  },
+}
+
+const singleInstanceLock = app.requestSingleInstanceLock()
+if (!singleInstanceLock) {
+  app.quit()
+  process.exit(0)
+}
 
 const SERVICES = {
   appleMusic: {
@@ -99,6 +163,39 @@ const SERVICES = {
   },
 }
 
+const ALLOWED_SERVICE_ORIGINS = new Set(
+  Object.values(SERVICES).map((service) => new URL(service.url).origin)
+)
+
+function executeInWebContents(webContents, script, {
+  requireReady = true,
+  retries = 2,
+  label = 'script',
+} = {}) {
+  return playerController.enqueue(async () => {
+    if (!webContents || webContents.isDestroyed()) return null
+    if (!playerController.canExecute(requireReady)) return null
+
+    for (let attempt = 1; attempt <= retries + 1; attempt += 1) {
+      try {
+        if (isExecutingScript) return null
+        isExecutingScript = true
+        const result = await webContents.executeJavaScript(script)
+        isExecutingScript = false
+        if (attempt > 1) {
+          playerController.log(`${label} recovered on retry #${attempt - 1}`)
+        }
+        return result
+      } catch (err) {
+        isExecutingScript = false
+        playerController.log(`${label} failed attempt ${attempt}:`, err?.message || err)
+        if (attempt > retries) throw err
+      }
+    }
+    return null
+  })
+}
+
 function getContentBounds() {
   if (!mainWindow) return { x: 220, y: 45, width: 980, height: 633 }
   const b = mainWindow.getContentBounds()
@@ -108,6 +205,79 @@ function getContentBounds() {
     width: Math.max(360, b.width - 220),
     height: Math.max(200, b.height - 45 - 72),
   }
+}
+
+function logProcessMetrics(tag = 'metrics') {
+  if (!DEBUG_PLAYER) return
+  try {
+    const mem = process.memoryUsage()
+    const mb = (v) => Math.round((v / 1024 / 1024) * 10) / 10
+    const metricsCount = app.getAppMetrics().length
+    console.log(
+      `[player] ${tag} rss=${mb(mem.rss)}MB heap=${mb(mem.heapUsed)}MB appMetrics=${metricsCount}`
+    )
+  } catch (_) {}
+}
+
+function destroyBrowserViewInstance(view, serviceId = 'unknown') {
+  if (!view) return
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.removeBrowserView(view)
+    }
+  } catch (_) {}
+
+  try {
+    if (view.webContents && !view.webContents.isDestroyed()) {
+      view.webContents.removeAllListeners()
+      view.webContents.destroy()
+    }
+  } catch (_) {}
+
+  if (serviceId && views[serviceId] === view) {
+    delete views[serviceId]
+  }
+}
+
+function cleanupAllResources() {
+  if (isCleaningUp) return
+  isCleaningUp = true
+
+  clearSleepTimer()
+  clearTimeout(scrobbleTimeout)
+  globalShortcut.unregisterAll()
+  discord.disconnectDiscord().catch(() => {})
+
+  if (processMetricsTimer) {
+    clearInterval(processMetricsTimer)
+    processMetricsTimer = null
+  }
+
+  Object.entries(views).forEach(([serviceId, view]) => {
+    destroyBrowserViewInstance(view, serviceId)
+  })
+
+  if (miniWindow && !miniWindow.isDestroyed()) {
+    try {
+      miniWindow.destroy()
+    } catch (_) {}
+    miniWindow = null
+  }
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.removeAllListeners()
+      mainWindow.destroy()
+    } catch (_) {}
+    mainWindow = null
+  }
+
+  if (tray && !tray.isDestroyed()) {
+    try {
+      tray.destroy()
+    } catch (_) {}
+  }
+  tray = null
 }
 
 function applyViewBounds() {
@@ -120,6 +290,8 @@ function applyViewBounds() {
 }
 
 function createMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) return mainWindow
+
   mainWindow = new BrowserWindow({
     icon: path.join(__dirname, 'assets', 'icon.png'),
     width: 1200,
@@ -127,6 +299,7 @@ function createMainWindow() {
     minWidth: 900,
     minHeight: 600,
     frame: false,
+    autoHideMenuBar: true,
     titleBarStyle: 'hidden',
     backgroundColor: '#0d0d0d',
     show: false,
@@ -134,7 +307,8 @@ function createMainWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
+      backgroundThrottling: true,
       webSecurity: true,
     },
   })
@@ -143,6 +317,8 @@ function createMainWindow() {
   mainWindow.once('ready-to-show', () => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show()
   })
+
+  mainWindow.setMenuBarVisibility(false)
 
   if (app.isPackaged) {
     mainWindow.loadFile(
@@ -169,43 +345,256 @@ function createMainWindow() {
 
   mainWindow.on('resize', applyViewBounds)
 
+  mainWindow.on('blur', () => {
+    if (activeView?.webContents && !activeView.webContents.isDestroyed()) {
+      activeView.webContents.send('melo:polling-mode', 'background')
+    }
+  })
+
+  mainWindow.on('focus', () => {
+    if (activeView?.webContents && !activeView.webContents.isDestroyed()) {
+      activeView.webContents.send('melo:polling-mode', 'foreground')
+    }
+  })
+
+  mainWindow.on('close', () => {
+    // Cierre directo: no mantener procesos en background.
+  })
+
   mainWindow.on('closed', () => {
-    Object.values(views).forEach((v) => {
-      try {
-        if (v?.webContents && !v.webContents.isDestroyed()) {
-          v.webContents.destroy()
-        }
-      } catch (_) {}
+    Object.entries(views).forEach(([serviceId, view]) => {
+      destroyBrowserViewInstance(view, serviceId)
     })
     mainWindow = null
   })
+
+  playerController.log('mainWindow created')
+  logProcessMetrics('window-created')
+  return mainWindow
+}
+
+function clearSleepTimer() {
+  if (sleepTimer) {
+    clearTimeout(sleepTimer)
+    sleepTimer = null
+  }
+  if (sleepFadeInterval) {
+    clearInterval(sleepFadeInterval)
+    sleepFadeInterval = null
+  }
+}
+
+async function startFadeOut(durationMs = 3000) {
+  if (!activeView?.webContents) return
+  const steps = 20
+  const stepTime = durationMs / steps
+  let step = 0
+
+  return new Promise((resolve) => {
+    sleepFadeInterval = setInterval(async () => {
+      step += 1
+      const vol = Math.max(0, 1 - (step / steps))
+      try {
+        await executeInWebContents(activeView.webContents, `
+          (() => {
+            const media = document.querySelector('video, audio')
+            if (media) media.volume = ${vol}
+          })()
+        `, { requireReady: false, retries: 1, label: 'sleep-fade' })
+      } catch (_) {}
+
+      if (step >= steps) {
+        clearInterval(sleepFadeInterval)
+        sleepFadeInterval = null
+        resolve()
+      }
+    }, stepTime)
+  })
+}
+
+async function triggerSleepNow() {
+  await startFadeOut(3000)
+  await runPlayerAction('play')
+  store.set('sleepActive', false)
+  store.set('sleepAfterSong', false)
+  store.delete('sleepEndsAt')
+  sleepAfterSongAnchor = null
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('sleep:triggered')
+  }
+}
+
+function createTray() {
+  try {
+    const iconPath = path.join(__dirname, 'assets', 'icon.png')
+
+    if (!fs.existsSync(iconPath)) {
+      console.warn('Tray: icono no encontrado en', iconPath)
+      return
+    }
+
+    let icon = nativeImage.createFromPath(iconPath)
+    if (icon.isEmpty()) {
+      console.warn('Tray: icono vacio, omitiendo tray')
+      return
+    }
+
+    icon = icon.resize({ width: 16, height: 16 })
+    tray = new Tray(icon)
+    tray.setToolTip('Melo')
+    renderTrayMenu()
+
+    tray.on('click', () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      if (mainWindow.isVisible() && mainWindow.isFocused()) {
+        mainWindow.hide()
+      } else {
+        mainWindow.show()
+        mainWindow.focus()
+      }
+    })
+  } catch (err) {
+    console.error('Error al crear tray:', err.message)
+  }
+}
+
+function renderTrayMenu() {
+  if (!tray || tray.isDestroyed()) return
+
+  try {
+    const track = trayCurrentTrack
+    const hasLongTitle = (track?.title || '').length > 40
+    const titleLabel = track?.title
+      ? `${track.title.slice(0, 40)}${hasLongTitle ? '...' : ''}`
+      : 'Sin reproduccion'
+    const artistLabel = track?.artist || ''
+
+    tray.setToolTip(track ? `Melo - ${titleLabel}` : 'Melo')
+
+    const template = [
+      {
+        label: titleLabel,
+        enabled: false,
+      },
+      ...(artistLabel
+        ? [{
+          label: artistLabel,
+          enabled: false,
+        }]
+        : []),
+      { type: 'separator' },
+      {
+        label: 'Anterior',
+        click: () => runPlayerAction('previous').catch(() => {}),
+      },
+      {
+        label: 'Play / Pause',
+        click: () => runPlayerAction('play').catch(() => {}),
+      },
+      {
+        label: 'Siguiente',
+        click: () => runPlayerAction('next').catch(() => {}),
+      },
+      { type: 'separator' },
+      {
+        label: 'Mostrar Melo',
+        click: () => {
+          if (!mainWindow || mainWindow.isDestroyed()) return
+          mainWindow.show()
+          mainWindow.focus()
+        },
+      },
+      { type: 'separator' },
+      {
+        label: 'Salir de Melo',
+        click: () => {
+          isQuitting = true
+          if (tray && !tray.isDestroyed()) tray.destroy()
+          tray = null
+          app.quit()
+        },
+      },
+    ]
+
+    const menu = Menu.buildFromTemplate(template)
+    tray.setContextMenu(menu)
+  } catch (err) {
+    console.error('Error al renderizar menu del tray:', err.message)
+  }
+}
+
+function updateTrayTrack(data) {
+  if (!tray || tray.isDestroyed()) return
+  const trackId = `${data?.title || ''}-${data?.artist || ''}`
+  if (trackId === lastTrayTrackId) return
+  lastTrayTrackId = trackId
+  trayCurrentTrack = data
+  renderTrayMenu()
+}
+
+function checkConnection() {
+  isOnline = net.isOnline()
+  return isOnline
 }
 
 // Registrar una reproduccion unica por cambio de track.
 function trackPlay(data, serviceId) {
   if (!data?.title) return
   const trackId = `${data.title}-${data.artist || ''}`
-  if (trackId === lastTracked) return
-  lastTracked = trackId
 
-  const entry = {
-    id: Date.now(),
-    title: data.title,
-    artist: data.artist || null,
-    album: data.album || null,
-    artwork: data.artwork || null,
-    service: serviceId,
-    playedAt: Date.now(),
+  if (currentTrackData && currentTrackStart) {
+    const previousTrackId = `${currentTrackData.title || ''}-${currentTrackData.artist || ''}`
+    if (trackId !== previousTrackId) {
+      const listenedMs = Date.now() - currentTrackStart
+      if (listenedMs > 10000) {
+        const plays = history.get('plays', [])
+        const entry = {
+          id: Date.now(),
+          title: currentTrackData.title,
+          artist: currentTrackData.artist || null,
+          album: currentTrackData.album || null,
+          artwork: currentTrackData.artwork || null,
+          service: currentTrackData.serviceId,
+          playedAt: currentTrackStart,
+          listenedMs,
+        }
+        plays.unshift(entry)
+        if (plays.length > 5000) plays.splice(5000)
+        history.set('plays', plays)
+      }
+    } else {
+      return
+    }
   }
 
-  const plays = history.get('plays', [])
-  plays.unshift(entry)
-  if (plays.length > 5000) plays.splice(5000)
-  history.set('plays', plays)
+  currentTrackStart = Date.now()
+  currentTrackData = { ...data, serviceId }
 }
 
 function buildSummary(plays) {
   if (!plays.length) return null
+
+  const totalMs = plays.reduce((acc, p) => acc + (p.listenedMs || 0), 0)
+  const totalHours = Math.floor(totalMs / 3600000)
+  const totalMinutes = Math.floor((totalMs % 3600000) / 60000)
+
+  const serviceTime = {}
+  plays.forEach((p) => {
+    if (!p.service) return
+    serviceTime[p.service] = (serviceTime[p.service] || 0) + (p.listenedMs || 0)
+  })
+
+  const serviceStats = Object.entries(serviceTime)
+    .map(([id, ms]) => ({
+      id,
+      name: SERVICES[id]?.name || id,
+      color: SERVICES[id]?.color || '#ffffff',
+      ms,
+      hours: Math.floor(ms / 3600000),
+      minutes: Math.floor((ms % 3600000) / 60000),
+      percent: totalMs > 0 ? Math.round((ms / totalMs) * 100) : 0,
+    }))
+    .sort((a, b) => b.ms - a.ms)
 
   const artistCount = {}
   plays.forEach((p) => {
@@ -219,21 +608,25 @@ function buildSummary(plays) {
 
   const trackCount = {}
   plays.forEach((p) => {
-    const key = `${p.title}-${p.artist || ''}`
-    if (!trackCount[key]) trackCount[key] = { ...p, count: 0 }
+    const key = `${p.title}||${p.artist || ''}`
+    if (!trackCount[key]) trackCount[key] = { ...p, count: 0, totalMs: 0 }
     trackCount[key].count++
+    trackCount[key].totalMs += p.listenedMs || 0
   })
 
   const topTracks = Object.values(trackCount)
     .sort((a, b) => b.count - a.count)
     .slice(0, 5)
 
-  const serviceCount = {}
-  plays.forEach((p) => {
-    serviceCount[p.service] = (serviceCount[p.service] || 0) + 1
-  })
-  const topService = Object.entries(serviceCount)
-    .sort((a, b) => b[1] - a[1])[0]?.[0]
+  const activityMap = {}
+  const now = Date.now()
+  const yearAgo = now - 365 * 24 * 3600 * 1000
+  plays
+    .filter((p) => p.playedAt > yearAgo)
+    .forEach((p) => {
+      const day = new Date(p.playedAt).toISOString().split('T')[0]
+      activityMap[day] = (activityMap[day] || 0) + 1
+    })
 
   const hourCount = Array(24).fill(0)
   plays.forEach((p) => {
@@ -246,11 +639,15 @@ function buildSummary(plays) {
 
   return {
     totalPlays: plays.length,
+    totalMs,
+    totalHours,
+    totalMinutes,
+    serviceStats,
     topArtists,
     topTracks,
-    topService,
     peakHour,
     uniqueDays: days.size,
+    activityMap,
     firstPlay: plays[plays.length - 1]?.playedAt,
     lastPlay: plays[0]?.playedAt,
   }
@@ -305,7 +702,20 @@ function toggleMiniPlayer() {
 }
 
 function createServiceView(serviceId, url) {
-  if (views[serviceId]) return views[serviceId]
+  const existing = views[serviceId]
+  if (existing && existing.webContents && !existing.webContents.isDestroyed()) {
+    const currentUrl = existing.webContents.getURL()
+    if (currentUrl === url) return existing
+    destroyBrowserViewInstance(existing, serviceId)
+  }
+
+  Object.entries(views).forEach(([id, view]) => {
+    if (id !== serviceId) {
+      destroyBrowserViewInstance(view, id)
+    }
+  })
+
+  playerController.setState(PLAYER_STATE.LOADING, `create view ${serviceId}`)
 
   const view = new BrowserView({
     webPreferences: {
@@ -313,7 +723,8 @@ function createServiceView(serviceId, url) {
       partition: `persist:melo-${serviceId}`,
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
+      backgroundThrottling: true,
       plugins: true,
       allowRunningInsecureContent: false,
     },
@@ -328,7 +739,54 @@ function createServiceView(serviceId, url) {
       'Version/17.0 Safari/605.1.15'
   )
 
-  view.webContents.loadURL(url)
+  if (view.webContents.getURL() !== url) {
+    view.webContents.loadURL(url)
+  }
+
+  view.webContents.removeAllListeners('did-start-loading')
+  view.webContents.on('did-start-loading', () => {
+    playerController.setState(PLAYER_STATE.LOADING, `did-start-loading ${serviceId}`)
+  })
+
+  view.webContents.removeAllListeners('did-fail-load')
+  view.webContents.on('did-fail-load', () => {
+    playerController.setState(PLAYER_STATE.ERROR, `did-fail-load ${serviceId}`)
+  })
+
+  view.webContents.on('did-finish-load', () => {
+    playerController.setState(PLAYER_STATE.READY, `did-finish-load ${serviceId}`)
+    applyVolumeToWebContents(view.webContents, currentVolumeLevel).catch(() => {})
+    view.webContents.send(
+      'melo:polling-mode',
+      mainWindow?.isFocused() ? 'foreground' : 'background'
+    )
+  })
+
+  view.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    try {
+      const target = new URL(targetUrl)
+      if (ALLOWED_SERVICE_ORIGINS.has(target.origin)) {
+        return { action: 'allow' }
+      }
+      shell.openExternal(targetUrl).catch(() => {})
+      return { action: 'deny' }
+    } catch (_) {
+      return { action: 'deny' }
+    }
+  })
+
+  view.webContents.removeAllListeners('will-navigate')
+  view.webContents.on('will-navigate', (event, targetUrl) => {
+    try {
+      const target = new URL(targetUrl)
+      if (!ALLOWED_SERVICE_ORIGINS.has(target.origin)) {
+        event.preventDefault()
+        shell.openExternal(targetUrl).catch(() => {})
+      }
+    } catch (_) {
+      event.preventDefault()
+    }
+  })
 
   views[serviceId] = view
   webContentsToService.set(view.webContents.id, serviceId)
@@ -336,14 +794,55 @@ function createServiceView(serviceId, url) {
   view.webContents.on('destroyed', () => {
     webContentsToService.delete(view.webContents.id)
     delete views[serviceId]
+    if (playerController.activeServiceId === serviceId) {
+      playerController.setState(PLAYER_STATE.NOT_LOADED, `destroyed ${serviceId}`)
+    }
   })
 
   return view
 }
 
+function applyVolumeToWebContents(webContents, volume) {
+  if (!webContents || webContents.isDestroyed()) return Promise.resolve(false)
+  const safeVolume = Math.max(0, Math.min(1, Number(volume)))
+
+  return executeInWebContents(webContents, `
+    (() => {
+      const mediaElements = []
+      const stack = [document]
+
+      while (stack.length) {
+        const root = stack.pop()
+        if (!root) continue
+
+        if (root.querySelectorAll) {
+          root.querySelectorAll('audio,video').forEach((m) => mediaElements.push(m))
+          root.querySelectorAll('*').forEach((el) => {
+            if (el.shadowRoot) stack.push(el.shadowRoot)
+          })
+        }
+      }
+
+      mediaElements.forEach((media) => {
+        media.volume = ${safeVolume}
+        media.muted = ${safeVolume} === 0
+      })
+
+      return mediaElements.length
+    })()
+  `, { requireReady: false, retries: 1, label: 'set-volume' }).catch(() => false)
+}
+
 async function switchToService(serviceId, url, serviceData) {
   if (!mainWindow || mainWindow.isDestroyed()) return
-  if (activeView && activeView === views[serviceId]) return
+  if (activeView && activeView === views[serviceId] && playerController.state === PLAYER_STATE.READY) {
+    return
+  }
+
+  const previousServiceId = playerController.activeServiceId
+
+  playerController.activeServiceId = serviceId
+  playerController.setState(PLAYER_STATE.LOADING, `switch ${serviceId}`)
 
   if (activeView) {
     try {
@@ -354,7 +853,7 @@ async function switchToService(serviceId, url, serviceData) {
 
       // Pausar con timeout de seguridad.
       await Promise.race([
-        activeView.webContents.executeJavaScript(`
+        executeInWebContents(activeView.webContents, `
           (() => {
             for (const btn of document.querySelectorAll('button')) {
               const label = (btn.getAttribute('aria-label') || '')
@@ -367,12 +866,15 @@ async function switchToService(serviceId, url, serviceData) {
             }
             return false
           })()
-        `).catch(() => false),
+        `, { requireReady: false, retries: 1, label: 'pause-previous-service' }).catch(() => false),
         new Promise((r) => setTimeout(r, 500))
       ])
     } catch (_) {}
 
     try { mainWindow.removeBrowserView(activeView) } catch (_) {}
+    if (previousServiceId && previousServiceId !== serviceId) {
+      destroyBrowserViewInstance(activeView, previousServiceId)
+    }
   }
 
   const nextView = createServiceView(serviceId, url)
@@ -383,6 +885,13 @@ async function switchToService(serviceId, url, serviceData) {
 
   mainWindow.addBrowserView(nextView)
   activeView = nextView
+  Object.entries(views).forEach(([id, view]) => {
+    try {
+      if (!view.webContents.isDestroyed()) {
+        view.webContents.setAudioMuted(id !== serviceId)
+      }
+    } catch (_) {}
+  })
   setTimeout(applyViewBounds, 50)
 
   mainWindow.webContents.send('service:active', {
@@ -395,6 +904,10 @@ async function switchToService(serviceId, url, serviceData) {
 async function runPlayerAction(action) {
   if (!activeView?.webContents) return
   if (activeView.webContents.isDestroyed()) return
+  if (playerController.state !== PLAYER_STATE.READY) {
+    playerController.log('ignored action while not ready:', action, playerController.state)
+    return
+  }
 
   const mediaKeys = {
     play: 'MediaPlayPause',
@@ -407,19 +920,6 @@ async function runPlayerAction(action) {
     activeView.webContents.focus()
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus()
   } catch (_) {}
-
-  if (mediaKeys[action]) {
-    try {
-      activeView.webContents.sendInputEvent({
-        type: 'keyDown',
-        keyCode: mediaKeys[action],
-      })
-      activeView.webContents.sendInputEvent({
-        type: 'keyUp',
-        keyCode: mediaKeys[action],
-      })
-    } catch (_) {}
-  }
 
   const scripts = {
     play: `(() => {
@@ -653,17 +1153,47 @@ async function runPlayerAction(action) {
   if (!scripts[action]) return
 
   try {
-    const result = await activeView.webContents.executeJavaScript(scripts[action])
+    const result = await executeInWebContents(
+      activeView.webContents,
+      scripts[action],
+      { requireReady: true, retries: 2, label: `action:${action}` }
+    )
     console.log(`Player action [${action}] -> ${result}`)
   } catch (err) {
+    if (mediaKeys[action]) {
+      try {
+        activeView.webContents.sendInputEvent({
+          type: 'keyDown',
+          keyCode: mediaKeys[action],
+        })
+        activeView.webContents.sendInputEvent({
+          type: 'keyUp',
+          keyCode: mediaKeys[action],
+        })
+      } catch (_) {}
+    }
     console.error(`Player action [${action}] failed:`, err.message)
   }
 }
 
 function registerIpcHandlers() {
+  ;[
+    'service:switch',
+    'browserview:hide',
+    'browserview:show',
+    'player:action',
+    'player:volume',
+    'player:seek',
+    'mini:toggle',
+    'media:update',
+  ].forEach((channel) => ipcMain.removeAllListeners(channel))
+
   ipcMain.on('service:switch', async (_e, { serviceId, url, service }) => {
+    store.set('lastService', { serviceId, url, service })
     await switchToService(serviceId, url, service)
   })
+
+  ipcMain.handle('services:getLast', () => store.get('lastService', null))
 
   ipcMain.handle('services:connected', async () => {
     const connected = []
@@ -710,17 +1240,44 @@ function registerIpcHandlers() {
     if (activeView.webContents.isDestroyed()) return
 
     const safeVolume = Math.max(0, Math.min(1, Number(volume)))
-
-    activeView.webContents.executeJavaScript(`
-      (() => {
-        const media = document.querySelector('video, audio')
-        if (!media) return false
-        media.volume = ${safeVolume}
-        return true
-      })()
-    `).catch(() => {})
-
+    currentVolumeLevel = safeVolume
+    store.set('volumeLevel', safeVolume)
+    applyVolumeToWebContents(activeView.webContents, safeVolume).catch(() => {})
     activeView.webContents.setAudioMuted(safeVolume === 0)
+  })
+
+  ipcMain.on('player:seek', (_e, positionSeconds) => {
+    if (!activeView?.webContents) return
+    if (activeView.webContents.isDestroyed()) return
+
+    const safePosition = Math.max(0, Number(positionSeconds) || 0)
+    executeInWebContents(activeView.webContents, `
+      (() => {
+        const mediaElements = []
+        const stack = [document]
+
+        while (stack.length) {
+          const root = stack.pop()
+          if (!root) continue
+
+          if (root.querySelectorAll) {
+            root.querySelectorAll('audio,video').forEach((m) => mediaElements.push(m))
+            root.querySelectorAll('*').forEach((el) => {
+              if (el.shadowRoot) stack.push(el.shadowRoot)
+            })
+          }
+        }
+
+        let changed = false
+        for (const media of mediaElements) {
+          if (!Number.isFinite(media.duration) || media.duration <= 0) continue
+          media.currentTime = Math.max(0, Math.min(${safePosition}, media.duration))
+          changed = true
+        }
+
+        return changed
+      })()
+    `, { requireReady: false, retries: 1, label: 'seek' }).catch(() => false)
   })
 
   ipcMain.on('mini:toggle', () => {
@@ -731,7 +1288,7 @@ function registerIpcHandlers() {
     if (!activeView?.webContents) return []
     if (activeView.webContents.isDestroyed()) return []
     try {
-      return await activeView.webContents.executeJavaScript(`
+      return await executeInWebContents(activeView.webContents, `
         [...document.querySelectorAll('button')]
           .filter(b => b.getAttribute('aria-label'))
           .map(b => ({
@@ -739,7 +1296,7 @@ function registerIpcHandlers() {
             disabled: b.disabled,
             visible: b.offsetParent !== null
           }))
-      `)
+      `, { requireReady: false, retries: 1, label: 'debug-buttons' })
     } catch (_) {
       return []
     }
@@ -747,33 +1304,68 @@ function registerIpcHandlers() {
 
   ipcMain.on('media:update', (event, data) => {
     if (!mainWindow || mainWindow.isDestroyed()) return
-
     const serviceId = webContentsToService.get(event.sender.id)
     if (!serviceId || !data) return
 
     const isActiveService = (
-      activeView
-      && !activeView.webContents.isDestroyed()
-      && activeView.webContents.id === event.sender.id
+      activeView &&
+      !activeView.webContents.isDestroyed() &&
+      activeView.webContents.id === event.sender.id
     )
-
-    if (isActiveService) {
-      mainWindow.webContents.send('media:update', {
-        serviceId,
-        ...data,
-        isActive: true,
-      })
-
-      if (miniWindow && !miniWindow.isDestroyed()) {
-        miniWindow.webContents.send('media:update', { serviceId, ...data })
-      }
-    }
 
     if (!isActiveService) return
 
-    trackPlay(data, serviceId)
+    // Deteccion mejorada: Apple Music a veces no reporta `playing` en Media Session.
+    const isPlaying = (
+      data.state === 'playing' ||
+      (data.title != null && data.state !== 'paused' && data.state !== 'none')
+    )
 
-    const service = Object.values(SERVICES).find((s) => s.id === serviceId)
+    const trackId = data.title ? `${data.title}-${data.artist || ''}` : null
+    store.set('currentTrackId', trackId)
+
+    if (store.get('sleepAfterSong', false)) {
+      if (!sleepAfterSongAnchor && trackId) {
+        sleepAfterSongAnchor = trackId
+      } else if (trackId && sleepAfterSongAnchor && trackId !== sleepAfterSongAnchor) {
+        clearSleepTimer()
+        triggerSleepNow().catch(() => {})
+      }
+    }
+
+    const signature = [
+      data.title || '',
+      data.artist || '',
+      data.album || '',
+      data.artwork || '',
+      isPlaying ? '1' : '0',
+    ].join('|')
+
+    if (lastMediaSignatureByService.get(serviceId) === signature) {
+      return
+    }
+    lastMediaSignatureByService.set(serviceId, signature)
+
+    mainWindow.webContents.send('media:update', {
+      serviceId,
+      ...data,
+      isPlaying,
+    })
+
+    if (miniWindow && !miniWindow.isDestroyed()) {
+      miniWindow.webContents.send('media:update', {
+        serviceId,
+        ...data,
+        isPlaying,
+      })
+    }
+
+    updateTrayTrack({
+      title: data.title,
+      artist: data.artist,
+    })
+
+    trackPlay(data, serviceId)
 
     if (store.get('notificationsEnabled', true) && data.title) {
       notifyTrackChange({
@@ -784,6 +1376,8 @@ function registerIpcHandlers() {
     }
 
     if (store.get('discordEnabled', false) && data.title) {
+      const service = Object.values(SERVICES)
+        .find((s) => s.id === serviceId)
       discord.updatePresence({
         title: data.title,
         artist: data.artist,
@@ -812,6 +1406,50 @@ function registerIpcHandlers() {
   ipcMain.handle('stats:getSummary', () => {
     const plays = history.get('plays', [])
     return buildSummary(plays)
+  })
+
+  ipcMain.handle('network:status', () => ({
+    online: checkConnection(),
+  }))
+
+  ipcMain.handle('player:getProgress', async () => {
+    if (!activeView?.webContents) return { position: 0, duration: 0 }
+    if (activeView.webContents.isDestroyed()) return { position: 0, duration: 0 }
+
+    try {
+      const progress = await executeInWebContents(activeView.webContents, `
+        (() => {
+          const mediaElements = []
+          const stack = [document]
+
+          while (stack.length) {
+            const root = stack.pop()
+            if (!root) continue
+
+            if (root.querySelectorAll) {
+              root.querySelectorAll('audio,video').forEach((m) => mediaElements.push(m))
+              root.querySelectorAll('*').forEach((el) => {
+                if (el.shadowRoot) stack.push(el.shadowRoot)
+              })
+            }
+          }
+
+          for (const media of mediaElements) {
+            if (!Number.isFinite(media.duration) || media.duration <= 0) continue
+            return {
+              position: Number(media.currentTime) || 0,
+              duration: Number(media.duration) || 0,
+            }
+          }
+
+          return { position: 0, duration: 0 }
+        })()
+      `, { requireReady: false, retries: 1, label: 'get-progress' })
+
+      return progress || { position: 0, duration: 0 }
+    } catch (_) {
+      return { position: 0, duration: 0 }
+    }
   })
 
   ipcMain.handle('stats:getWrapped', (_e, { from, to } = {}) => {
@@ -886,12 +1524,18 @@ function registerIpcHandlers() {
     notificationsEnabled: store.get('notificationsEnabled', true),
     theme: store.get('theme', 'dark'),
     accentColor: store.get('accentColor', '#fc3c44'),
+    volumeLevel: store.get('volumeLevel', 1),
     autoUpdateEnabled: store.get('autoUpdateEnabled', true),
+    dynamicTheme: store.get('dynamicTheme', false),
+    customTheme: store.get('customTheme', null),
   }))
 
   ipcMain.handle('settings:save', (_e, { key, value }) => {
     if (!key) return false
     store.set(key, value)
+    if (key === 'autoUpdateEnabled' && value === true) {
+      setupAutoUpdater(mainWindow)
+    }
     return true
   })
 
@@ -910,6 +1554,53 @@ function registerIpcHandlers() {
   ipcMain.handle('notification:show', (_e, { title, body, silent }) => {
     new Notification({ title, body, silent: silent ?? true }).show()
   })
+
+  ipcMain.handle('sleep:set', async (_e, { minutes, afterSong }) => {
+    clearSleepTimer()
+
+    if (afterSong) {
+      store.set('sleepAfterSong', true)
+      store.set('sleepActive', true)
+      sleepAfterSongAnchor = store.get('currentTrackId', null)
+      store.delete('sleepEndsAt')
+      return { active: true, afterSong: true }
+    }
+
+    if (!minutes || minutes <= 0) {
+      store.set('sleepActive', false)
+      store.set('sleepAfterSong', false)
+      store.delete('sleepEndsAt')
+      return { active: false }
+    }
+
+    const ms = minutes * 60 * 1000
+    const endsAt = Date.now() + ms
+
+    store.set('sleepActive', true)
+    store.set('sleepAfterSong', false)
+    store.set('sleepEndsAt', endsAt)
+
+    sleepTimer = setTimeout(async () => {
+      await triggerSleepNow()
+    }, ms)
+
+    return { active: true, endsAt }
+  })
+
+  ipcMain.handle('sleep:cancel', () => {
+    clearSleepTimer()
+    store.set('sleepActive', false)
+    store.set('sleepAfterSong', false)
+    store.delete('sleepEndsAt')
+    sleepAfterSongAnchor = null
+    return { active: false }
+  })
+
+  ipcMain.handle('sleep:status', () => ({
+    active: store.get('sleepActive', false),
+    endsAt: store.get('sleepEndsAt', null),
+    afterSong: store.get('sleepAfterSong', false),
+  }))
 }
 
 function registerGlobalShortcuts() {
@@ -944,6 +1635,8 @@ app.whenReady().then(async () => {
     lastfm.configure(lfmConfig)
   }
 
+  Menu.setApplicationMenu(null)
+
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
@@ -956,19 +1649,58 @@ app.whenReady().then(async () => {
   })
 
   createMainWindow()
+  createTray()
   registerIpcHandlers()
   registerGlobalShortcuts()
+
+  checkConnection()
+  networkStatusTimer = setInterval(() => {
+    const wasOnline = isOnline
+    const nowOnline = checkConnection()
+    if (wasOnline !== nowOnline && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('network:status', { online: nowOnline })
+    }
+  }, 5000)
+
+  if (DEBUG_PLAYER) {
+    processMetricsTimer = setInterval(() => {
+      logProcessMetrics('heartbeat')
+    }, 30000)
+  }
   if (store.get('autoUpdateEnabled', true)) {
     setupAutoUpdater(mainWindow)
   }
 })
 
+app.on('second-instance', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (!mainWindow.isVisible()) mainWindow.show()
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.focus()
+})
+
+app.on('before-quit', () => {
+  isQuitting = true
+  cleanupAllResources()
+})
+
 app.on('window-all-closed', () => {
-  clearTimeout(scrobbleTimeout)
-  if (miniWindow && !miniWindow.isDestroyed()) miniWindow.close()
-  discord.disconnectDiscord().catch(() => {})
-  globalShortcut.unregisterAll()
-  if (process.platform !== 'darwin') app.quit()
+  app.quit()
+})
+
+app.on('quit', () => {
+  process.exit(0)
+})
+
+process.on('exit', () => {
+  if (processMetricsTimer) {
+    clearInterval(processMetricsTimer)
+    processMetricsTimer = null
+  }
+  if (networkStatusTimer) {
+    clearInterval(networkStatusTimer)
+    networkStatusTimer = null
+  }
 })
 
 app.on('activate', () => {

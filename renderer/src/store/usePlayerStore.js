@@ -4,6 +4,7 @@ export const usePlayerStore = create((set) => ({
   // Estado del player
   currentTrack: null,
   isPlaying: false,
+  volumeLevel: 1,
 
   // Servicios
   activeServiceId: null,
@@ -19,6 +20,8 @@ export const usePlayerStore = create((set) => ({
   miniPlayerOpen: false,
   theme: 'dark',
   accentColor: '#fc3c44',
+  dynamicThemeEnabled: false,
+  customTheme: null,
 
   // Integraciones (v0.3)
   discordEnabled: false,
@@ -37,6 +40,7 @@ export const usePlayerStore = create((set) => ({
   // Acciones
   setTrack: (track) => set({ currentTrack: track }),
   setPlaying: (v) => set({ isPlaying: v }),
+  setVolumeLevel: (v) => set({ volumeLevel: v }),
 
   setActiveService: (id, color, name) => set({
     activeServiceId: id,
@@ -57,6 +61,8 @@ export const usePlayerStore = create((set) => ({
   setSettingsOpen: (v) => set({ settingsOpen: v }),
   setTheme: (theme) => set({ theme }),
   setAccentColor: (accentColor) => set({ accentColor }),
+  setDynamicTheme: (v) => set({ dynamicThemeEnabled: v }),
+  setCustomTheme: (customTheme) => set({ customTheme }),
 
   setDiscord: (v) => set({ discordEnabled: v }),
   setDiscordClientId: (v) => set({ discordClientId: v }),
@@ -67,11 +73,14 @@ export const usePlayerStore = create((set) => ({
   setNotifications: (v) => set({ notificationsEnabled: v }),
   setStats: (v) => set({ statsEnabled: v }),
   setAutoUpdate: (v) => set({ autoUpdateEnabled: v }),
+  clearPlayHistory: () => set({ playHistory: [] }),
 
   hydrateSettings: (settings) => set((s) => ({
     ...s,
     theme: settings.theme ?? s.theme,
     accentColor: settings.accentColor ?? s.accentColor,
+    dynamicThemeEnabled: settings.dynamicTheme ?? s.dynamicThemeEnabled,
+    customTheme: settings.customTheme ?? s.customTheme,
     notificationsEnabled: settings.notificationsEnabled ?? s.notificationsEnabled,
     discordEnabled: settings.discordEnabled ?? s.discordEnabled,
     discordClientId: settings.discordClientId ?? s.discordClientId,
@@ -79,6 +88,7 @@ export const usePlayerStore = create((set) => ({
     lastfmApiKey: settings.lastfm?.apiKey ?? s.lastfmApiKey,
     lastfmApiSecret: settings.lastfm?.apiSecret ?? s.lastfmApiSecret,
     lastfmSessionKey: settings.lastfm?.sessionKey ?? s.lastfmSessionKey,
+    volumeLevel: settings.volumeLevel ?? s.volumeLevel,
     autoUpdateEnabled: settings.autoUpdateEnabled ?? s.autoUpdateEnabled,
   })),
 

@@ -4,6 +4,8 @@ import { SERVICES } from '../../../services/registry'
 import { version } from '../../../package.json'
 import { usePlayerStore } from '../store/usePlayerStore'
 import SettingsRow from './SettingsRow.jsx'
+import ThemeEditor from './ThemeEditor.jsx'
+import { applyTheme } from '../utils/applyTheme'
 
 const THEMES = ['dark', 'oled', 'light', 'nord', 'catppuccin', 'custom']
 
@@ -27,14 +29,16 @@ export default function SettingsPanel({ isOpen, onClose }) {
     setView,
     theme,
     setTheme,
-    accentColor,
-    setAccentColor,
+    dynamicThemeEnabled,
+    setDynamicTheme,
+    customTheme,
     statsEnabled,
     setStats,
     autoUpdateEnabled,
     setAutoUpdate,
     connectedServices,
     playHistory,
+    clearPlayHistory,
   } = usePlayerStore()
 
   const [discordConnected, setDiscordConnected] = useState(false)
@@ -61,6 +65,16 @@ export default function SettingsPanel({ isOpen, onClose }) {
     URL.revokeObjectURL(url)
   }
 
+  const handleClearStats = async () => {
+    const confirmed = window.confirm('Esto eliminara todas tus estadisticas guardadas. Esta seguro?')
+    if (!confirmed) return
+
+    try {
+      await window.melo.stats.clear()
+      clearPlayHistory()
+    } catch (_) {}
+  }
+
   const persist = (key, value) => {
     window.melo.saveSettings(key, value).catch(() => {})
   }
@@ -72,17 +86,13 @@ export default function SettingsPanel({ isOpen, onClose }) {
 
   const handleThemeChange = async (nextTheme) => {
     setTheme(nextTheme)
+    applyTheme(nextTheme, nextTheme === 'custom' ? customTheme : null)
     await window.melo.saveSettings('theme', nextTheme)
   }
 
   const handleAutoUpdateToggle = (enabled) => {
     setAutoUpdate(enabled)
     persist('autoUpdateEnabled', enabled)
-  }
-
-  const handleAccentChange = (color) => {
-    setAccentColor(color)
-    persist('accentColor', color)
   }
 
   const handleDiscordToggle = async (enabled) => {
@@ -150,6 +160,11 @@ export default function SettingsPanel({ isOpen, onClose }) {
     onClose()
   }
 
+  const handleSwitchToPicker = () => {
+    setView('picker')
+    onClose()
+  }
+
   return (
     <>
       <div className={`settings-overlay ${isOpen ? 'show' : ''}`} onClick={onClose} />
@@ -163,6 +178,9 @@ export default function SettingsPanel({ isOpen, onClose }) {
         <div className="settings-content">
           <section>
             <h3>SERVICIOS <span className="badge-version">v0.2</span></h3>
+            <button className="settings-btn-secondary" onClick={handleSwitchToPicker}>
+              Cambiar servicio
+            </button>
             {Object.values(SERVICES).map((service) => {
               const isActive = activeServiceId === service.id
               const isConnected = connectedServices.includes(service.id)
@@ -285,13 +303,21 @@ export default function SettingsPanel({ isOpen, onClose }) {
               ))}
             </div>
             {theme === 'custom' && (
-              <SettingsRow
-                label="Color custom"
-                type="input"
-                value={accentColor}
-                onChange={handleAccentChange}
-              />
+              <ThemeEditor onClose={() => {}} />
             )}
+            <SettingsRow
+              label="Tema dinamico por artwork"
+              sublabel="El color cambia segun la portada del album"
+              type="toggle"
+              value={dynamicThemeEnabled}
+              onChange={async (v) => {
+                setDynamicTheme(v)
+                await window.melo.saveSettings('dynamicTheme', v)
+                if (!v) {
+                  applyTheme(theme, customTheme)
+                }
+              }}
+            />
           </section>
 
           <section>
@@ -305,6 +331,7 @@ export default function SettingsPanel({ isOpen, onClose }) {
             <h3>ESTADISTICAS <span className="badge-version">v0.5</span></h3>
             <SettingsRow label="Guardar historial" type="toggle" value={statsEnabled} onChange={setStats} />
             <SettingsRow label="Exportar datos" type="button" onChange={handleExport} />
+            <SettingsRow label="Borrar estadisticas" type="button" buttonText="Borrar" onChange={handleClearStats} />
           </section>
 
           <section>

@@ -1,5 +1,15 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
+const SERVICE_HOSTS = new Set([
+  'music.apple.com',
+  'open.spotify.com',
+  'music.youtube.com',
+  'listen.tidal.com',
+  'www.deezer.com',
+])
+
+const isServiceContext = SERVICE_HOSTS.has(window.location.hostname)
+
 // Leer Media Session en modo solo-lectura.
 function readMediaSession() {
   try {
@@ -16,22 +26,68 @@ function readMediaSession() {
   }
 }
 
-// Polling cada 800ms para enviar metadata al proceso principal.
-let _poll = null
-function startPolling() {
-  if (_poll) return
-  _poll = setInterval(() => {
-    try {
-      const data = readMediaSession()
-      if (data?.title) ipcRenderer.send('media:update', data)
-    } catch (_) {}
-  }, 800)
+let _pollTimer = null
+let _pollInFlight = false
+let _pollIntervalMs = 2500
+
+function stopPolling() {
+  if (_pollTimer) {
+    clearTimeout(_pollTimer)
+    _pollTimer = null
+  }
 }
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', startPolling)
-} else {
-  startPolling()
+function schedulePolling() {
+  stopPolling()
+  _pollTimer = setTimeout(runPollingTick, _pollIntervalMs)
+}
+
+function runPollingTick() {
+  if (_pollInFlight) {
+    schedulePolling()
+    return
+  }
+
+  _pollInFlight = true
+  try {
+    const data = readMediaSession()
+    if (data?.title) ipcRenderer.send('media:update', data)
+  } catch (_) {
+  } finally {
+    _pollInFlight = false
+    schedulePolling()
+  }
+}
+
+function startPolling() {
+  if (!isServiceContext || _pollTimer) return
+  schedulePolling()
+}
+
+function handleVisibilityMode() {
+  _pollIntervalMs = document.hidden ? 5000 : 2500
+  if (isServiceContext) schedulePolling()
+}
+
+if (isServiceContext) {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startPolling, { once: true })
+  } else {
+    startPolling()
+  }
+
+  document.addEventListener('visibilitychange', handleVisibilityMode)
+
+  ipcRenderer.removeAllListeners('melo:polling-mode')
+  ipcRenderer.on('melo:polling-mode', (_e, mode) => {
+    _pollIntervalMs = mode === 'background' ? 5000 : 2500
+    schedulePolling()
+  })
+
+  window.addEventListener('beforeunload', () => {
+    stopPolling()
+    ipcRenderer.removeAllListeners('melo:polling-mode')
+  })
 }
 
 contextBridge.exposeInMainWorld('melo', {
@@ -47,6 +103,12 @@ contextBridge.exposeInMainWorld('melo', {
   setVolume: (vol) => {
     ipcRenderer.send('player:volume', vol)
   },
+  seek: (positionSeconds) => {
+    ipcRenderer.send('player:seek', positionSeconds)
+  },
+  getProgress: () => {
+    return ipcRenderer.invoke('player:getProgress')
+  },
   switchService: (serviceId, url, service) => {
     ipcRenderer.send('service:switch', { serviceId, url, service })
   },
@@ -61,6 +123,9 @@ contextBridge.exposeInMainWorld('melo', {
   },
   getConnectedServices: () => {
     return ipcRenderer.invoke('services:connected')
+  },
+  getLastService: () => {
+    return ipcRenderer.invoke('services:getLast')
   },
   debugButtons: () => {
     return ipcRenderer.invoke('debug:buttons')
@@ -93,6 +158,10 @@ contextBridge.exposeInMainWorld('melo', {
     export: () => ipcRenderer.invoke('stats:export'),
     clear: () => ipcRenderer.invoke('stats:clear'),
   },
+  network: {
+    getStatus: () => ipcRenderer.invoke('network:status'),
+    onChange: (cb) => ipcRenderer.on('network:status', (_e, data) => cb(data)),
+  },
   update: {
     onChecking: (cb) => ipcRenderer.on('update:checking', cb),
     onAvailable: (cb) => ipcRenderer.on('update:available', (_e, d) => cb(d)),
@@ -102,6 +171,12 @@ contextBridge.exposeInMainWorld('melo', {
     onError: (cb) => ipcRenderer.on('update:error', (_e, d) => cb(d)),
     check: () => ipcRenderer.invoke('update:check'),
     install: () => ipcRenderer.invoke('update:install'),
+  },
+  sleep: {
+    set: (opts) => ipcRenderer.invoke('sleep:set', opts),
+    cancel: () => ipcRenderer.invoke('sleep:cancel'),
+    status: () => ipcRenderer.invoke('sleep:status'),
+    onTriggered: (cb) => ipcRenderer.on('sleep:triggered', cb),
   },
   windowAction: (action) => {
     return ipcRenderer.invoke('window:action', action)

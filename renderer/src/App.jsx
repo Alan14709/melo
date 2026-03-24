@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from './store/usePlayerStore'
 import ServicePicker from './components/ServicePicker.jsx'
 import LoginView from './components/LoginView.jsx'
@@ -9,8 +9,14 @@ import SettingsPanel from './components/SettingsPanel.jsx'
 import CommandPalette from './components/CommandPalette.jsx'
 import StatsView from './components/StatsView.jsx'
 import UpdateBanner from './components/UpdateBanner.jsx'
+import OfflineBanner from './components/OfflineBanner.jsx'
+import { extractPalette } from './utils/colorExtractor'
+import { applyTheme, applyDynamicPalette } from './utils/applyTheme'
 
 export default function App() {
+  const [sleepMenuOpen, setSleepMenuOpen] = useState(false)
+  const lastMediaRef = useRef('')
+  const lastPlaybackRef = useRef(null)
   const {
     currentView, setView,
     pendingService, setPendingService,
@@ -18,7 +24,6 @@ export default function App() {
     setActiveService, addConnectedService,
     settingsOpen, setSettingsOpen,
     addToHistory, statsEnabled,
-    accentColor,
     commandPaletteOpen,
     setCommandPaletteOpen,
     theme,
@@ -29,27 +34,74 @@ export default function App() {
 
   // Cargar preferencias persistidas desde el proceso principal.
   useEffect(() => {
-    window.melo.getSettings().then((settings) => {
-      hydrateSettings(settings || {})
-      if (settings?.theme) setTheme(settings.theme)
-      if (settings?.accentColor) setAccentColor(settings.accentColor)
-    }).catch(() => {})
+    const init = async () => {
+      try {
+        const settings = await window.melo.getSettings()
+        hydrateSettings(settings || {})
+        if (settings?.theme) {
+          setTheme(settings.theme)
+          applyTheme(settings.theme, settings.customTheme)
+        }
+        if (settings?.accentColor) setAccentColor(settings.accentColor)
+
+        const last = await window.melo.getLastService()
+        if (last?.serviceId) {
+          window.melo.switchService(last.serviceId, last.url, last.service)
+          setActiveService(
+            last.serviceId,
+            last.service?.color || '#fc3c44',
+            last.service?.name || last.serviceId
+          )
+          setView('player')
+        }
+      } catch (_) {}
+    }
+
+    init()
   }, [hydrateSettings, setAccentColor, setTheme])
 
   // Escuchar metadata enviada por el preload del BrowserView.
   useEffect(() => {
-    window.melo.onMediaUpdate((data) => {
+    window.melo.onMediaUpdate(async (data) => {
       if (!data?.title) return
-      setTrack({
-        title: data.title,
-        artist: data.artist ?? null,
-        album: data.album ?? null,
-        artwork: data.artwork ?? null,
-      })
-      setPlaying(data.state === 'playing')
+
+      const mediaSignature = [
+        data.title || '',
+        data.artist || '',
+        data.album || '',
+        data.artwork || '',
+      ].join('|')
+
+      if (lastMediaRef.current !== mediaSignature) {
+        lastMediaRef.current = mediaSignature
+        setTrack({
+          title: data.title,
+          artist: data.artist ?? null,
+          album: data.album ?? null,
+          artwork: data.artwork ?? null,
+        })
+      }
+
+      // Priorizar `isPlaying` calculado en main para Apple Music.
+      const nextPlaying = (data.isPlaying ?? data.state === 'playing')
+      if (lastPlaybackRef.current !== nextPlaying) {
+        lastPlaybackRef.current = nextPlaying
+        setPlaying(nextPlaying)
+      }
 
       if (statsEnabled && data.title) {
         addToHistory(data)
+      }
+
+      const { dynamicThemeEnabled } = usePlayerStore.getState()
+      if (dynamicThemeEnabled && data.artwork) {
+        try {
+          const palette = await extractPalette(data.artwork)
+          if (palette) {
+            applyDynamicPalette(palette)
+            setAccentColor(palette.accent)
+          }
+        } catch (_) {}
       }
 
     })
@@ -67,24 +119,30 @@ export default function App() {
     addConnectedService,
     addToHistory,
     setActiveService,
+    setAccentColor,
     setPlaying,
     setTrack,
     statsEnabled,
   ])
 
   useEffect(() => {
-    if (theme === 'custom') {
-      document.documentElement.style.setProperty('--accent', accentColor)
-    }
-  }, [theme, accentColor])
-
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme)
+    const { customTheme } = usePlayerStore.getState()
+    applyTheme(theme, customTheme)
   }, [theme])
 
   // BrowserView siempre queda por encima del DOM: ocultarlo al abrir ajustes.
   useEffect(() => {
-    if (settingsOpen || currentView === 'stats') {
+    const onSleepMenu = (event) => {
+      setSleepMenuOpen(Boolean(event?.detail?.open))
+    }
+    window.addEventListener('melo:sleep-menu', onSleepMenu)
+    return () => window.removeEventListener('melo:sleep-menu', onSleepMenu)
+  }, [])
+
+  useEffect(() => {
+    if (settingsOpen || currentView !== 'player') {
+      window.melo.hideBrowserView()
+    } else if (sleepMenuOpen) {
       window.melo.hideBrowserView()
     } else {
       window.melo.showBrowserView()
@@ -93,7 +151,7 @@ export default function App() {
     return () => {
       window.melo.showBrowserView()
     }
-  }, [currentView, settingsOpen])
+  }, [currentView, settingsOpen, sleepMenuOpen])
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -150,6 +208,7 @@ export default function App() {
             </div>
           </div>
           <PlayerBar />
+          <OfflineBanner />
           <UpdateBanner />
           <SettingsPanel
             isOpen={settingsOpen}
@@ -170,6 +229,7 @@ export default function App() {
             <StatsView />
           </div>
           <PlayerBar />
+          <OfflineBanner />
           <UpdateBanner />
           <SettingsPanel
             isOpen={settingsOpen}
