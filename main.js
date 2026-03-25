@@ -20,6 +20,204 @@ const discord = require('./integrations/discord')
 const lastfm = require('./integrations/lastfm')
 const { notifyTrackChange } = require('./integrations/notifications')
 const { setupAutoUpdater } = require('./integrations/updater')
+const { adapterManager } = require('./services/adapters/AdapterManager')
+const { BrowserViewAdapter } = require('./services/adapters/BrowserViewAdapter')
+const { playbackState } = require('./services/adapters/PlaybackState')
+const { RetryManager } = require('./services/RetryManager')
+const { HealthMonitor } = require('./services/HealthMonitor')
+const logger = require('./services/Logger')
+
+// Modo debug de produccion activable por variable de entorno.
+const DEBUG_MODE = process.env.DEBUG === '1' || process.env.DEBUG === 'true'
+if (DEBUG_MODE) logger.setLevel('debug')
+
+const RENDERER_FALLBACK_FLAGS = {
+  gpu: '--melo-gpu-fallback',
+  sandbox: '--melo-no-sandbox-fallback',
+}
+const rendererFallbackState = {
+  relaunchScheduled: false,
+}
+const performanceMetrics = {
+  appStartAt: Date.now(),
+  mainWindowCreatedAt: null,
+  rendererReadyAt: null,
+  startupDurationMs: null,
+  switchLatencyTotalMs: 0,
+  switchLatencyMaxMs: 0,
+  switchLatencySamples: 0,
+  memorySamples: [],
+}
+const fallbackMetrics = {
+  gpuFallbacksTriggered: 0,
+  noSandboxFallbacksTriggered: 0,
+  fallbackExhausted: 0,
+  launchFailures: 0,
+  launchSuccesses: 0,
+  incidents: [],
+  lastIncident: null,
+}
+const fallbackStatus = {
+  phase: 'idle',
+  stage: null,
+  message: null,
+  mitigated: false,
+  updatedAt: new Date().toISOString(),
+}
+
+function updateFallbackStatus(patch = {}) {
+  Object.assign(fallbackStatus, patch, { updatedAt: new Date().toISOString() })
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('fallback:status', { ...fallbackStatus })
+  }
+}
+
+function recordFallbackIncident(event, payload = {}) {
+  const incident = {
+    event,
+    timestamp: new Date().toISOString(),
+    ...payload,
+  }
+  if (event === 'gpu_fallback_triggered') fallbackMetrics.gpuFallbacksTriggered += 1
+  if (event === 'no_sandbox_fallback_triggered') fallbackMetrics.noSandboxFallbacksTriggered += 1
+  if (event === 'fallback_exhausted') fallbackMetrics.fallbackExhausted += 1
+  if (event === 'launch_failure') fallbackMetrics.launchFailures += 1
+  if (event === 'launch_success') fallbackMetrics.launchSuccesses += 1
+
+  fallbackMetrics.lastIncident = incident
+  fallbackMetrics.incidents.push(incident)
+  if (fallbackMetrics.incidents.length > 80) {
+    fallbackMetrics.incidents.shift()
+  }
+
+  healthMonitor?.recordRendererEvent?.(event, payload)
+}
+
+function hasFlag(flag) {
+  return process.argv.includes(flag)
+}
+
+function getRuntimeDiagnostics(extra = {}) {
+  return {
+    platform: process.platform,
+    arch: process.arch,
+    pid: process.pid,
+    packaged: app.isPackaged,
+    sessionType: process.env.XDG_SESSION_TYPE || '',
+    display: process.env.DISPLAY || '',
+    waylandDisplay: process.env.WAYLAND_DISPLAY || '',
+    xdgRuntimeDir: process.env.XDG_RUNTIME_DIR || '',
+    gpuFallbackActive: hasFlag(RENDERER_FALLBACK_FLAGS.gpu) || process.env.MELO_GPU_FALLBACK === '1',
+    sandboxFallbackActive: hasFlag(RENDERER_FALLBACK_FLAGS.sandbox) || process.env.MELO_NO_SANDBOX_FALLBACK === '1',
+    linuxCompatMode: process.env.MELO_LINUX_COMPAT_MODE === '1',
+    argv: process.argv,
+    ...extra,
+  }
+}
+
+function scheduleRendererFallbackRelaunch(source, details = {}) {
+  const reason = details?.reason || 'unknown'
+  if (reason !== 'launch-failed') return false
+  if (rendererFallbackState.relaunchScheduled) return false
+
+  const args = process.argv.slice(1)
+  const hasGpuFallback = hasFlag(RENDERER_FALLBACK_FLAGS.gpu)
+  const hasSandboxFallback = hasFlag(RENDERER_FALLBACK_FLAGS.sandbox)
+
+  if (!hasGpuFallback) {
+    args.push(RENDERER_FALLBACK_FLAGS.gpu)
+    recordFallbackIncident('gpu_fallback_triggered', {
+      source,
+      reason,
+      serviceId: details?.serviceId || null,
+      targetUrl: details?.targetUrl || null,
+    })
+    updateFallbackStatus({
+      phase: 'relaunching',
+      stage: 'gpu',
+      mitigated: false,
+      message: 'Relaunching renderer with GPU fallback...',
+    })
+  } else if (!hasSandboxFallback) {
+    args.push(RENDERER_FALLBACK_FLAGS.sandbox)
+    recordFallbackIncident('no_sandbox_fallback_triggered', {
+      source,
+      reason,
+      serviceId: details?.serviceId || null,
+      targetUrl: details?.targetUrl || null,
+    })
+    updateFallbackStatus({
+      phase: 'relaunching',
+      stage: 'no-sandbox',
+      mitigated: false,
+      message: 'Entering safe mode (no-sandbox fallback)...',
+    })
+  } else {
+    recordFallbackIncident('fallback_exhausted', {
+      source,
+      reason,
+      serviceId: details?.serviceId || null,
+      targetUrl: details?.targetUrl || null,
+    })
+    updateFallbackStatus({
+      phase: 'exhausted',
+      stage: 'no-sandbox',
+      mitigated: false,
+      message: 'Renderer fallback exhausted. Manual action required.',
+    })
+    logger.error('RendererFallback', 'fallback_exhausted', getRuntimeDiagnostics({
+      source,
+      reason,
+      details,
+    }))
+    return false
+  }
+
+  rendererFallbackState.relaunchScheduled = true
+  logger.warn('RendererFallback', 'relaunch_scheduled', getRuntimeDiagnostics({
+    source,
+    reason,
+    details,
+    nextArgs: args,
+  }))
+
+  setTimeout(() => {
+    try {
+      app.relaunch({ args })
+      app.exit(0)
+    } catch (error) {
+      logger.error('RendererFallback', 'relaunch_failed', normalizeErrorPayload(error, source))
+      rendererFallbackState.relaunchScheduled = false
+    }
+  }, 500)
+
+  return true
+}
+
+function normalizeErrorPayload(err, origin) {
+  return {
+    message: err?.message || String(err || 'unknown_error'),
+    stack: err?.stack || null,
+    origin,
+    timestamp: new Date().toISOString(),
+  }
+}
+
+// Capturar errores globales para evitar caidas silenciosas en produccion.
+process.on('uncaughtException', (err, origin) => {
+  logger.error('Main', 'uncaught_exception', normalizeErrorPayload(err, origin || 'main'))
+})
+
+process.on('unhandledRejection', (reason) => {
+  logger.error('Main', 'unhandled_rejection', normalizeErrorPayload(reason, 'promise'))
+})
+
+// Forzar una sola instancia para evitar conflictos de audio y WebContents.
+if (!app.requestSingleInstanceLock()) {
+  logger.warn('Main', 'second_instance_blocked')
+  app.quit()
+  process.exit(0)
+}
 
 // Configuracion de Widevine para DRM.
 app.commandLine.appendSwitch('enable-features', 'WidevineCdm')
@@ -28,21 +226,49 @@ app.commandLine.appendSwitch(
   'unsafely-treat-insecure-origin-as-secure',
   'http://localhost:5173'
 )
+app.commandLine.appendSwitch('enable-logging')
+app.commandLine.appendSwitch('v', '1')
 
+
+const gpuFallbackActive = hasFlag(RENDERER_FALLBACK_FLAGS.gpu)
+  || process.env.MELO_GPU_FALLBACK === '1'
+  || process.env.MELO_LINUX_COMPAT_MODE === '1'
+const sandboxFallbackActive = hasFlag(RENDERER_FALLBACK_FLAGS.sandbox)
+  || process.env.MELO_NO_SANDBOX_FALLBACK === '1'
 
 if (process.platform === 'linux') {
-  app.commandLine.appendSwitch('no-sandbox')
-  app.commandLine.appendSwitch('disable-setuid-sandbox')
-  app.commandLine.appendSwitch('enable-unsafe-swiftshader')
-  app.commandLine.appendSwitch('disable-gpu-sandbox')
-  app.commandLine.appendSwitch('in-process-gpu')
-  app.commandLine.appendSwitch(
-    'disable-features',
-    'VizDisplayCompositor,UseSkiaRenderer'
-  )
+  // Detectar Wayland y forzar XWayland por compatibilidad.
+  const isWayland = process.env.WAYLAND_DISPLAY
+    || process.env.XDG_SESSION_TYPE === 'wayland'
+  const linuxCompatMode = process.env.MELO_LINUX_COMPAT_MODE === '1'
+  if (isWayland) {
+    app.commandLine.appendSwitch('ozone-platform', 'x11')
+    logger.info('Main', 'wayland_detected', { mode: 'x11' })
+  }
+
+  if (sandboxFallbackActive || linuxCompatMode) {
+    app.commandLine.appendSwitch('no-sandbox')
+    app.commandLine.appendSwitch('disable-setuid-sandbox')
+  }
+  if (gpuFallbackActive) {
+    // Fallback controlado para hosts Linux con problemas de GPU/renderer.
+    app.commandLine.appendSwitch('disable-gpu')
+    app.commandLine.appendSwitch('disable-gpu-compositing')
+    logger.warn('Main', 'gpu_fallback_enabled', getRuntimeDiagnostics({
+      linuxCompatMode,
+      sandboxFallbackActive,
+    }))
+  }
 }
 
-app.disableHardwareAcceleration()
+if (process.platform === 'darwin') {
+  // Habilitar soporte de captura de audio moderno en macOS.
+  app.commandLine.appendSwitch('enable-features', 'ScreenCaptureKitAudio')
+}
+
+if (gpuFallbackActive) {
+  app.disableHardwareAcceleration()
+}
 
 // Cargar flags adicionales por sistema operativo.
 try {
@@ -51,7 +277,13 @@ try {
     const flags = JSON.parse(fs.readFileSync(flagsFile, 'utf8'))
     const platformFlags = flags[process.platform] || []
     platformFlags.forEach((flag) => {
-      app.commandLine.appendSwitch(flag.replace('--', ''))
+      // Aceptar switches con valor para evitar flags mal parseados.
+      const normalized = String(flag || '').replace(/^--/, '')
+      const [key, ...rest] = normalized.split('=')
+      const value = rest.length ? rest.join('=') : undefined
+      if (!key) return
+      if (value === undefined) app.commandLine.appendSwitch(key)
+      else app.commandLine.appendSwitch(key, value)
     })
   }
 } catch (_) {}
@@ -75,15 +307,34 @@ let scrobbleTimeout = null
 let currentTrackStart = null
 let currentTrackData = null
 let currentVolumeLevel = Math.max(0, Math.min(1, Number(store.get('volumeLevel', 1))))
-let sleepTimer = null
-let sleepFadeInterval = null
-let sleepAfterSongAnchor = null
-const lastMediaSignatureByService = new Map()
+// Controlar frecuencia de eventos de media para reducir ruido en renderer.
+let _lastMediaTitle = null
+let _lastProgressUpdate = 0
+const PROGRESS_UPDATE_INTERVAL = 2000
 let processMetricsTimer = null
+let metricsBroadcastTimer = null
 let networkStatusTimer = null
 let isOnline = true
 let isCleaningUp = false
 let isExecutingScript = false
+let switchQueue = Promise.resolve()
+let pendingSwitchCount = 0
+const loadAbortControllers = new Map()
+const crashedServices = new Set()
+const viewMetrics = {
+  switches: 0,
+  crashes: 0,
+  recoveries: 0,
+  viewsCreated: 0,
+  viewsDestroyed: 0,
+  loadCancelled: 0,
+  loadFailures: 0,
+  ghostViewViolations: 0,
+  maxViewCount: 0,
+  startTime: Date.now(),
+}
+let healthMonitor = null
+const retryManager = new RetryManager(logger)
 const DEBUG_PLAYER = process.env.MELO_DEBUG_PLAYER === '1' || !app.isPackaged
 
 const PLAYER_STATE = {
@@ -100,7 +351,7 @@ const playerController = {
 
   log(...args) {
     if (DEBUG_PLAYER) {
-      console.log('[player]', ...args)
+      logger.debug('PlayerController', 'trace', { args })
     }
   },
 
@@ -124,10 +375,15 @@ const playerController = {
   },
 }
 
-const singleInstanceLock = app.requestSingleInstanceLock()
-if (!singleInstanceLock) {
-  app.quit()
-  process.exit(0)
+// Timing condicional para diagnostico de performance sin costo en modo normal.
+async function measureIfDebug(action, fn) {
+  if (!DEBUG_MODE) return fn()
+  const startedAt = Date.now()
+  try {
+    return await fn()
+  } finally {
+    logger.debug('Performance', action, { durationMs: Date.now() - startedAt })
+  }
 }
 
 const SERVICES = {
@@ -171,6 +427,7 @@ function executeInWebContents(webContents, script, {
   requireReady = true,
   retries = 2,
   label = 'script',
+  timeoutMs = 2000,
 } = {}) {
   return playerController.enqueue(async () => {
     if (!webContents || webContents.isDestroyed()) return null
@@ -180,7 +437,12 @@ function executeInWebContents(webContents, script, {
       try {
         if (isExecutingScript) return null
         isExecutingScript = true
-        const result = await webContents.executeJavaScript(script)
+        // Guard de cancelacion: cortar ejecucion si el WebContents se destruye.
+        const execution = webContents.executeJavaScript(script)
+        const timeout = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('execute_timeout')), timeoutMs)
+        })
+        const result = await Promise.race([execution, timeout])
         isExecutingScript = false
         if (attempt > 1) {
           playerController.log(`${label} recovered on retry #${attempt - 1}`)
@@ -188,6 +450,7 @@ function executeInWebContents(webContents, script, {
         return result
       } catch (err) {
         isExecutingScript = false
+        if (!webContents || webContents.isDestroyed()) return null
         playerController.log(`${label} failed attempt ${attempt}:`, err?.message || err)
         if (attempt > retries) throw err
       }
@@ -213,14 +476,504 @@ function logProcessMetrics(tag = 'metrics') {
     const mem = process.memoryUsage()
     const mb = (v) => Math.round((v / 1024 / 1024) * 10) / 10
     const metricsCount = app.getAppMetrics().length
-    console.log(
-      `[player] ${tag} rss=${mb(mem.rss)}MB heap=${mb(mem.heapUsed)}MB appMetrics=${metricsCount}`
-    )
+    logger.debug('Main', 'process_metrics', {
+      tag,
+      rssMb: mb(mem.rss),
+      heapUsedMb: mb(mem.heapUsed),
+      appMetrics: metricsCount,
+    })
   } catch (_) {}
+}
+
+function startMetricsReporter(intervalMs = 5000) {
+  if (metricsBroadcastTimer) clearInterval(metricsBroadcastTimer)
+  metricsBroadcastTimer = setInterval(() => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    mainWindow.webContents.send('metrics:update', getViewMetrics())
+  }, intervalMs)
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function getViewMetrics() {
+  const count = Object.keys(views).length
+  const launchAttempts = fallbackMetrics.launchSuccesses + fallbackMetrics.launchFailures
+  return {
+    ...viewMetrics,
+    activeService: playerController.activeServiceId,
+    viewCount: count,
+    queueLength: pendingSwitchCount,
+    uptimeMs: Date.now() - viewMetrics.startTime,
+    fallbackMetrics: {
+      ...fallbackMetrics,
+      launchAttempts,
+      launchSuccessRate: launchAttempts > 0
+        ? Math.round((fallbackMetrics.launchSuccesses / launchAttempts) * 10000) / 10000
+        : null,
+    },
+    performance: {
+      ...performanceMetrics,
+      avgSwitchLatencyMs: performanceMetrics.switchLatencySamples > 0
+        ? Math.round((performanceMetrics.switchLatencyTotalMs / performanceMetrics.switchLatencySamples) * 100) / 100
+        : null,
+      memorySamples: performanceMetrics.memorySamples.slice(-20),
+    },
+    retryMetrics: retryManager.getMetrics(),
+    healthMetrics: healthMonitor?.getMetrics?.() || null,
+    environment: getRuntimeDiagnostics(),
+  }
+}
+
+function trackViewCount() {
+  const count = Object.keys(views).length
+  viewMetrics.maxViewCount = Math.max(viewMetrics.maxViewCount, count)
+  if (count > 1) viewMetrics.ghostViewViolations += 1
+}
+
+function cancelPendingLoad(serviceId) {
+  const controller = loadAbortControllers.get(serviceId)
+  if (!controller) return
+  const view = views[serviceId]
+  try {
+    if (view?.webContents && !view.webContents.isDestroyed()) {
+      view.webContents.stop()
+    }
+  } catch (_) {}
+
+  viewMetrics.loadCancelled += 1
+  controller.abort()
+  loadAbortControllers.delete(serviceId)
+}
+
+function createLoadController(serviceId) {
+  cancelPendingLoad(serviceId)
+  const controller = new AbortController()
+  loadAbortControllers.set(serviceId, controller)
+  return controller
+}
+
+function loadURLWithTimeout(webContents, url, abortSignal, timeoutMs = 10000) {
+  if (abortSignal.aborted) {
+    return Promise.reject(new Error('load_cancelled'))
+  }
+
+  return new Promise((resolve, reject) => {
+    let completed = false
+    let timeoutId = null
+
+    const finish = (error, result) => {
+      if (completed) return
+      completed = true
+      if (timeoutId) clearTimeout(timeoutId)
+      abortSignal.removeEventListener('abort', onAbort)
+      if (error) reject(error)
+      else resolve(result)
+    }
+
+    const onAbort = () => finish(new Error('load_cancelled'))
+
+    abortSignal.addEventListener('abort', onAbort, { once: true })
+    timeoutId = setTimeout(() => {
+      finish(new Error(`load_timeout_${timeoutMs}ms`))
+    }, timeoutMs)
+
+    webContents.loadURL(url)
+      .then((result) => finish(null, result))
+      .catch((error) => finish(error))
+  })
+}
+
+function setupViewLifecycleHandlers(view, serviceId, url) {
+  view.webContents.on('crashed', () => {
+    handleViewCrash(serviceId, url, 'crashed').catch(() => {})
+  })
+
+  view.webContents.on('render-process-gone', (_event, details) => {
+    const diagnostics = {
+      serviceId,
+      targetUrl: url,
+      currentUrl: view.webContents.getURL(),
+      processId: view.webContents.getOSProcessId?.() || null,
+      reason: details?.reason || 'unknown',
+      exitCode: details?.exitCode,
+      metadata: details || null,
+    }
+    if (diagnostics.reason === 'launch-failed') {
+      recordFallbackIncident('launch_failure', diagnostics)
+    }
+    logger.error('BrowserView', 'render_process_gone', diagnostics)
+    scheduleRendererFallbackRelaunch('browserview', diagnostics)
+    handleViewCrash(serviceId, url, 'render-process-gone').catch(() => {})
+  })
+
+  view.webContents.on('unresponsive', () => {
+    logger.warn('BrowserView', 'unresponsive', { serviceId })
+  })
+
+  view.webContents.removeAllListeners('did-fail-load')
+  view.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
+    playerController.setState(PLAYER_STATE.ERROR, `did-fail-load ${serviceId}`)
+    viewMetrics.loadFailures += 1
+    logger.error('BrowserView', 'did_fail_load', {
+      serviceId,
+      errorCode,
+      errorDescription,
+    })
+  })
+}
+
+async function handleViewCrash(serviceId, url, reason) {
+  viewMetrics.crashes += 1
+  logger.error('BrowserView', 'crash_detected', { serviceId, reason })
+
+  if (playerController.activeServiceId !== serviceId || crashedServices.has(serviceId)) {
+    logger.info('BrowserView', 'recovery_skipped', {
+      serviceId,
+      isActive: playerController.activeServiceId === serviceId,
+      alreadyRecovering: crashedServices.has(serviceId),
+    })
+    return
+  }
+
+  crashedServices.add(serviceId)
+
+  try {
+    destroyBrowserViewInstance(views[serviceId], serviceId)
+    await sleep(1000)
+
+    if (playerController.activeServiceId === serviceId) {
+      await enqueueServiceSwitch(serviceId, url, SERVICES[serviceId])
+      viewMetrics.recoveries += 1
+      logger.info('BrowserView', 'recovery_success', { serviceId })
+    } else {
+      logger.info('BrowserView', 'recovery_cancelled', { serviceId })
+    }
+  } catch (error) {
+    logger.error('BrowserView', 'recovery_failed', {
+      serviceId,
+      message: error?.message || 'unknown_error',
+    })
+  } finally {
+    crashedServices.delete(serviceId)
+  }
+}
+
+function startMemoryMonitoring(intervalMs = 30000) {
+  if (processMetricsTimer) clearInterval(processMetricsTimer)
+
+  processMetricsTimer = setInterval(async () => {
+    try {
+      const info = await process.getProcessMemoryInfo()
+      const usage = process.memoryUsage()
+      const toMb = (v) => Math.round((Number(v || 0) / 1024 / 1024) * 10) / 10
+      const heapUsage = info.private ? null : (usage.heapUsed / Math.max(1, usage.heapTotal))
+
+      logger.debug('Memory', 'snapshot', {
+        privateMb: toMb(info.private),
+        residentSetMb: toMb(info.residentSet),
+        heapUsedMb: toMb(usage.heapUsed),
+        heapTotalMb: toMb(usage.heapTotal),
+        rssMb: toMb(usage.rss),
+      })
+
+      performanceMetrics.memorySamples.push({
+        timestamp: new Date().toISOString(),
+        rssMb: toMb(usage.rss),
+        heapUsedMb: toMb(usage.heapUsed),
+      })
+      if (performanceMetrics.memorySamples.length > 120) {
+        performanceMetrics.memorySamples.shift()
+      }
+
+      if (heapUsage != null && heapUsage > 0.9) {
+        logger.warn('Memory', 'high_usage', {
+          heapUsagePct: Math.round(heapUsage * 1000) / 10,
+        })
+      }
+    } catch (error) {
+      logger.warn('Memory', 'snapshot_failed', {
+        message: error?.message || 'unknown_error',
+      })
+    }
+  }, intervalMs)
+}
+
+async function getMemorySnapshotMb() {
+  const processInfo = await process.getProcessMemoryInfo().catch(() => ({}))
+  const usage = process.memoryUsage()
+  const toMb = (value) => Math.round((Number(value || 0) / 1024 / 1024) * 100) / 100
+  return {
+    residentSetMb: toMb(processInfo.residentSet || usage.rss),
+    privateMb: toMb(processInfo.private),
+    rssMb: toMb(usage.rss),
+    heapUsedMb: toMb(usage.heapUsed),
+    heapTotalMb: toMb(usage.heapTotal),
+  }
+}
+
+function ensureTestResultsDir() {
+  const dir = path.join(__dirname, 'test-results')
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+  } catch (_) {}
+  return dir
+}
+
+function writeTestReport(name, report) {
+  const dir = ensureTestResultsDir()
+  const filePath = path.join(dir, `${name}.json`)
+  fs.writeFileSync(filePath, JSON.stringify(report, null, 2), 'utf8')
+  return filePath
+}
+
+function getServiceLoop() {
+  return ['spotify', 'youtubeMusic', 'appleMusic', 'tidal', 'deezer']
+    .map((id) => SERVICES[id])
+    .filter(Boolean)
+}
+
+function randomDelay(minMs, maxMs) {
+  const min = Math.max(0, Number(minMs) || 0)
+  const max = Math.max(min, Number(maxMs) || min)
+  return Math.floor(min + Math.random() * (max - min + 1))
+}
+
+async function runStressValidation({ iterations = 40, minDelayMs = 50, maxDelayMs = 300 } = {}) {
+  const services = getServiceLoop()
+  if (!services.length) {
+    throw new Error('no_services_available_for_stress_test')
+  }
+
+  const initial = await getMemorySnapshotMb()
+  let peakMemoryMb = initial.rssMb
+
+  const baseline = { ...viewMetrics }
+  let loadCancellationValidated = false
+  let switchAttempts = 0
+
+  for (let idx = 0; idx < iterations; idx += 1) {
+    const service = services[idx % services.length]
+    switchAttempts += 1
+    await enqueueServiceSwitch(service.id, service.url, service)
+
+    if (idx % 7 === 0) {
+      const first = services[(idx + 1) % services.length]
+      const second = services[(idx + 2) % services.length]
+      switchAttempts += 2
+      const a = enqueueServiceSwitch(first.id, first.url, first)
+      const b = enqueueServiceSwitch(second.id, second.url, second)
+      await Promise.all([a, b])
+      loadCancellationValidated = true
+    }
+
+    const snap = await getMemorySnapshotMb()
+    peakMemoryMb = Math.max(peakMemoryMb, snap.rssMb)
+    await sleep(randomDelay(minDelayMs, maxDelayMs))
+  }
+
+  const final = await getMemorySnapshotMb()
+  const delta = {
+    switches: viewMetrics.switches - baseline.switches,
+    crashes: viewMetrics.crashes - baseline.crashes,
+    recoveries: viewMetrics.recoveries - baseline.recoveries,
+    viewsCreated: viewMetrics.viewsCreated - baseline.viewsCreated,
+    viewsDestroyed: viewMetrics.viewsDestroyed - baseline.viewsDestroyed,
+    loadCancelled: viewMetrics.loadCancelled - baseline.loadCancelled,
+  }
+
+  const report = {
+    initialMemoryMB: initial.rssMb,
+    finalMemoryMB: final.rssMb,
+    peakMemoryMB: peakMemoryMb,
+    switches: switchAttempts,
+    successfulSwitches: delta.switches,
+    crashes: delta.crashes,
+    recoveries: delta.recoveries,
+    viewsCreated: delta.viewsCreated,
+    viewsDestroyed: delta.viewsDestroyed,
+    loadCancelled: delta.loadCancelled,
+    maxViewCount: viewMetrics.maxViewCount,
+    ghostViewViolations: viewMetrics.ghostViewViolations,
+    loadCancellationValidated,
+    leakDetected: final.rssMb > initial.rssMb * 1.3,
+    gpuFallbacksTriggered: fallbackMetrics.gpuFallbacksTriggered,
+    noSandboxFallbacksTriggered: fallbackMetrics.noSandboxFallbacksTriggered,
+    fallbackExhausted: fallbackMetrics.fallbackExhausted,
+    launchFailures: fallbackMetrics.launchFailures,
+    launchSuccesses: fallbackMetrics.launchSuccesses,
+    metrics: getViewMetrics(),
+  }
+
+  report.reportPath = writeTestReport('stress-report', report)
+  return report
+}
+
+async function runLoadCancellationValidation() {
+  const services = getServiceLoop()
+  if (services.length < 2) {
+    return { success: false, reason: 'insufficient_services' }
+  }
+
+  const beforeCancelled = viewMetrics.loadCancelled
+  const first = services[0]
+  const second = services[1]
+
+  const pending = enqueueServiceSwitch(first.id, first.url, first)
+  const immediate = enqueueServiceSwitch(second.id, second.url, second)
+  await Promise.all([pending, immediate])
+
+  const activeCount = Object.keys(views).length
+  return {
+    success: true,
+    cancelledLoads: viewMetrics.loadCancelled - beforeCancelled,
+    activeViews: activeCount,
+    noGhostViews: activeCount <= 1,
+  }
+}
+
+async function runHealthValidation() {
+  if (!healthMonitor) {
+    return { success: false, reason: 'health_monitor_not_initialized' }
+  }
+
+  const original = {
+    lastAdapterActionTime: healthMonitor.lastAdapterActionTime,
+    mediaSessionAvailable: healthMonitor.mediaSessionAvailable,
+    playback: playbackState.getCurrent(),
+  }
+
+  const results = {}
+
+  playbackState.update({ isPlaying: false })
+  healthMonitor.recordAdapterAction()
+  results.pausedNoFalsePositive = healthMonitor.check()
+
+  playbackState.update({ isPlaying: true })
+  healthMonitor.setLastAdapterActionTime(Date.now() - 5000)
+  results.adapterTimeout = healthMonitor.check()
+
+  playbackState.update({ isPlaying: false })
+  playbackState.setLastUpdateTimestamp(Date.now() - 20000)
+  healthMonitor.setLastAdapterActionTime(Date.now() - 1000)
+  healthMonitor.setMediaSessionAvailable(true)
+  results.staleState = healthMonitor.check()
+
+  healthMonitor.setMediaSessionAvailable(false)
+  results.mediaSessionUnavailable = healthMonitor.check()
+
+  playbackState.update({
+    isPlaying: original.playback.isPlaying,
+    currentTime: original.playback.currentTime,
+    duration: original.playback.duration,
+    trackId: original.playback.trackId,
+    title: original.playback.title,
+    artist: original.playback.artist,
+    album: original.playback.album,
+    artwork: original.playback.artwork,
+    service: original.playback.service,
+  })
+  playbackState.setLastUpdateTimestamp(original.playback.timestamp || Date.now())
+  healthMonitor.setLastAdapterActionTime(original.lastAdapterActionTime)
+  healthMonitor.setMediaSessionAvailable(original.mediaSessionAvailable)
+
+  return {
+    success: true,
+    results,
+    passed: {
+      pausedNoFalsePositive: results.pausedNoFalsePositive.status === 'healthy',
+      adapterTimeout: results.adapterTimeout.reason === 'adapter_timeout',
+      staleState: results.staleState.reason === 'stale_state',
+      mediaSessionUnavailable: results.mediaSessionUnavailable.reason === 'no_media_session',
+    },
+  }
+}
+
+async function runSmokeValidation() {
+  const services = getServiceLoop()
+  const errors = []
+
+  for (let idx = 0; idx < 10; idx += 1) {
+    const service = services[idx % services.length]
+    try {
+      await enqueueServiceSwitch(service.id, service.url, service)
+      await sleep(120)
+    } catch (error) {
+      errors.push({ phase: 'switch', serviceId: service.id, message: error?.message || 'unknown_error' })
+    }
+  }
+
+  const waitForRendererReady = async (timeoutMs = 10000) => {
+    const startedAt = Date.now()
+    while (Date.now() - startedAt < timeoutMs) {
+      const isReady = Boolean(
+        activeView
+        && activeView.webContents
+        && !activeView.webContents.isDestroyed()
+        && playerController.state === PLAYER_STATE.READY
+        && playerController.activeServiceId
+      )
+      if (isReady) return true
+      await sleep(200)
+    }
+    return false
+  }
+
+  const rendererReady = await waitForRendererReady(10000)
+  if (!rendererReady) {
+    errors.push({ phase: 'preflight', message: 'invalid_environment_renderer_not_ready' })
+  }
+
+  for (const action of ['play', 'play', 'next']) {
+    if (!rendererReady) break
+    try {
+      await runPlayerAction(action)
+    } catch (error) {
+      errors.push({ phase: 'action', action, message: error?.message || 'unknown_error' })
+    }
+  }
+
+  await switchQueue.catch(() => {})
+
+  const snapshot = await getMemorySnapshotMb()
+  const report = {
+    success: errors.length === 0,
+    invalidEnvironment: !rendererReady,
+    errors,
+    memory: snapshot,
+    activeViews: Object.keys(views).length,
+    queueLength: pendingSwitchCount,
+    gpuFallbacksTriggered: fallbackMetrics.gpuFallbacksTriggered,
+    noSandboxFallbacksTriggered: fallbackMetrics.noSandboxFallbacksTriggered,
+    fallbackExhausted: fallbackMetrics.fallbackExhausted,
+    launchFailures: fallbackMetrics.launchFailures,
+    launchSuccesses: fallbackMetrics.launchSuccesses,
+    metrics: getViewMetrics(),
+  }
+
+  report.reportPath = writeTestReport('smoke-report', report)
+  return report
+}
+
+// Validaciones de payload IPC para bloquear entradas invalidas temprano.
+const isNonEmptyString = (value) => typeof value === 'string' && value.trim().length > 0
+const isFiniteNumber = (value) => Number.isFinite(Number(value))
+
+function sanitizeErrorPayload(payload) {
+  const raw = payload?.error || payload
+  return {
+    message: raw?.message || String(raw || 'unknown_error'),
+    stack: raw?.stack || null,
+    origin: payload?.origin || 'renderer',
+    timestamp: payload?.timestamp || new Date().toISOString(),
+  }
 }
 
 function destroyBrowserViewInstance(view, serviceId = 'unknown') {
   if (!view) return
+  if (serviceId) cancelPendingLoad(serviceId)
+
   try {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.removeBrowserView(view)
@@ -236,22 +989,99 @@ function destroyBrowserViewInstance(view, serviceId = 'unknown') {
 
   if (serviceId && views[serviceId] === view) {
     delete views[serviceId]
+    viewMetrics.viewsDestroyed += 1
+    trackViewCount()
+  }
+
+  if (serviceId && views[serviceId]) {
+    logger.error('BrowserView', 'destroy_verification_failed', { serviceId })
   }
 }
 
-function cleanupAllResources() {
+async function cleanupAllResources() {
   if (isCleaningUp) return
   isCleaningUp = true
 
-  clearSleepTimer()
+  // Limpieza centralizada para cierre consistente.
+  logger.info('Main', 'cleanup_start')
   clearTimeout(scrobbleTimeout)
+  scrobbleTimeout = null
+  for (const controller of loadAbortControllers.values()) {
+    try { controller.abort() } catch (_) {}
+  }
+  loadAbortControllers.clear()
+  crashedServices.clear()
+  pendingSwitchCount = 0
+  switchQueue = Promise.resolve()
+
+  if (healthMonitor) {
+    healthMonitor.shutdown()
+    healthMonitor = null
+  }
+
+  playbackState.destroy()
+  await adapterManager.destroyAll().catch(() => {})
+  await discord.disconnectDiscord().catch(() => {})
   globalShortcut.unregisterAll()
-  discord.disconnectDiscord().catch(() => {})
 
   if (processMetricsTimer) {
     clearInterval(processMetricsTimer)
     processMetricsTimer = null
   }
+
+  if (metricsBroadcastTimer) {
+    clearInterval(metricsBroadcastTimer)
+    metricsBroadcastTimer = null
+  }
+
+  if (networkStatusTimer) {
+    clearInterval(networkStatusTimer)
+    networkStatusTimer = null
+  }
+
+  // Evitar leaks de listeners IPC al cerrar/reiniciar app.
+  ipcMain.removeAllListeners('service:switch')
+  ipcMain.removeAllListeners('browserview:hide')
+  ipcMain.removeAllListeners('browserview:show')
+  ipcMain.removeAllListeners('player:action')
+  ipcMain.removeAllListeners('player:volume')
+  ipcMain.removeAllListeners('player:seek')
+  ipcMain.removeAllListeners('player:seek-to')
+  ipcMain.removeAllListeners('health:mediaSession')
+  ipcMain.removeAllListeners('mini:toggle')
+  ipcMain.removeAllListeners('media:update')
+  ;[
+    'service:switch',
+    'services:getLast',
+    'services:connected',
+    'debug:buttons',
+    'debug:metrics',
+    'debug:health',
+    'debug:crash-view',
+    'debug:validate-load-cancellation',
+    'debug:validate-health',
+    'debug:run-stress',
+    'debug:run-smoke',
+    'stats:getHistory',
+    'stats:getSummary',
+    'network:status',
+    'player:getProgress',
+    'stats:getWrapped',
+    'stats:export',
+    'stats:clear',
+    'discord:toggle',
+    'discord:status',
+    'lastfm:configure',
+    'lastfm:auth',
+    'lastfm:getSession',
+    'settings:get',
+    'settings:save',
+    'window:action',
+    'notification:show',
+    'melo:reportError',
+  ].forEach((channel) => {
+    try { ipcMain.removeHandler(channel) } catch (_) {}
+  })
 
   Object.entries(views).forEach(([serviceId, view]) => {
     destroyBrowserViewInstance(view, serviceId)
@@ -278,6 +1108,7 @@ function cleanupAllResources() {
     } catch (_) {}
   }
   tray = null
+  logger.info('Main', 'cleanup_complete')
 }
 
 function applyViewBounds() {
@@ -312,6 +1143,7 @@ function createMainWindow() {
       webSecurity: true,
     },
   })
+  performanceMetrics.mainWindowCreatedAt = Date.now()
 
   // Mostrar cuando el renderer este listo para evitar blanco/parpadeo en prod.
   mainWindow.once('ready-to-show', () => {
@@ -329,8 +1161,30 @@ function createMainWindow() {
     mainWindow.webContents.openDevTools({ mode: 'detach' })
   }
 
+  mainWindow.webContents.once('did-finish-load', () => {
+    if (!performanceMetrics.rendererReadyAt) {
+      performanceMetrics.rendererReadyAt = Date.now()
+      performanceMetrics.startupDurationMs = performanceMetrics.rendererReadyAt - performanceMetrics.appStartAt
+      recordFallbackIncident('launch_success', {
+        serviceId: playerController.activeServiceId || null,
+        targetUrl: mainWindow?.webContents?.getURL?.() || null,
+      })
+      logger.info('Performance', 'startup_ready', {
+        startupDurationMs: performanceMetrics.startupDurationMs,
+      })
+    }
+
+    if (fallbackStatus.phase === 'relaunching' || fallbackStatus.phase === 'manual_retry') {
+      updateFallbackStatus({
+        phase: 'mitigated',
+        mitigated: true,
+        message: 'Renderer recovered successfully.',
+      })
+    }
+  })
+
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
-    console.error('Failed to load:', errorCode, errorDescription, validatedURL)
+    logger.error('MainWindow', 'did_fail_load', { errorCode, errorDescription, validatedURL })
     if (app.isPackaged) {
       setTimeout(() => {
         if (!mainWindow || mainWindow.isDestroyed()) return
@@ -340,7 +1194,16 @@ function createMainWindow() {
   })
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.error('Render process gone:', details.reason)
+    const diagnostics = getRuntimeDiagnostics({
+      reason: details?.reason || 'unknown',
+      exitCode: details?.exitCode,
+      metadata: details || null,
+    })
+    if ((details?.reason || 'unknown') === 'launch-failed') {
+      recordFallbackIncident('launch_failure', diagnostics)
+    }
+    logger.error('MainWindow', 'render_process_gone', diagnostics)
+    scheduleRendererFallbackRelaunch('main-window', diagnostics)
   })
 
   mainWindow.on('resize', applyViewBounds)
@@ -373,69 +1236,18 @@ function createMainWindow() {
   return mainWindow
 }
 
-function clearSleepTimer() {
-  if (sleepTimer) {
-    clearTimeout(sleepTimer)
-    sleepTimer = null
-  }
-  if (sleepFadeInterval) {
-    clearInterval(sleepFadeInterval)
-    sleepFadeInterval = null
-  }
-}
-
-async function startFadeOut(durationMs = 3000) {
-  if (!activeView?.webContents) return
-  const steps = 20
-  const stepTime = durationMs / steps
-  let step = 0
-
-  return new Promise((resolve) => {
-    sleepFadeInterval = setInterval(async () => {
-      step += 1
-      const vol = Math.max(0, 1 - (step / steps))
-      try {
-        await executeInWebContents(activeView.webContents, `
-          (() => {
-            const media = document.querySelector('video, audio')
-            if (media) media.volume = ${vol}
-          })()
-        `, { requireReady: false, retries: 1, label: 'sleep-fade' })
-      } catch (_) {}
-
-      if (step >= steps) {
-        clearInterval(sleepFadeInterval)
-        sleepFadeInterval = null
-        resolve()
-      }
-    }, stepTime)
-  })
-}
-
-async function triggerSleepNow() {
-  await startFadeOut(3000)
-  await runPlayerAction('play')
-  store.set('sleepActive', false)
-  store.set('sleepAfterSong', false)
-  store.delete('sleepEndsAt')
-  sleepAfterSongAnchor = null
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('sleep:triggered')
-  }
-}
-
 function createTray() {
   try {
     const iconPath = path.join(__dirname, 'assets', 'icon.png')
 
     if (!fs.existsSync(iconPath)) {
-      console.warn('Tray: icono no encontrado en', iconPath)
+      logger.warn('Tray', 'icon_not_found', { iconPath })
       return
     }
 
     let icon = nativeImage.createFromPath(iconPath)
     if (icon.isEmpty()) {
-      console.warn('Tray: icono vacio, omitiendo tray')
+      logger.warn('Tray', 'icon_empty')
       return
     }
 
@@ -454,7 +1266,7 @@ function createTray() {
       }
     })
   } catch (err) {
-    console.error('Error al crear tray:', err.message)
+    logger.error('Tray', 'create_failed', { message: err?.message || 'unknown_error' })
   }
 }
 
@@ -519,7 +1331,7 @@ function renderTrayMenu() {
     const menu = Menu.buildFromTemplate(template)
     tray.setContextMenu(menu)
   } catch (err) {
-    console.error('Error al renderizar menu del tray:', err.message)
+    logger.error('Tray', 'render_menu_failed', { message: err?.message || 'unknown_error' })
   }
 }
 
@@ -701,7 +1513,7 @@ function toggleMiniPlayer() {
   }
 }
 
-function createServiceView(serviceId, url) {
+async function createServiceView(serviceId, url) {
   const existing = views[serviceId]
   if (existing && existing.webContents && !existing.webContents.isDestroyed()) {
     const currentUrl = existing.webContents.getURL()
@@ -739,18 +1551,11 @@ function createServiceView(serviceId, url) {
       'Version/17.0 Safari/605.1.15'
   )
 
-  if (view.webContents.getURL() !== url) {
-    view.webContents.loadURL(url)
-  }
+  setupViewLifecycleHandlers(view, serviceId, url)
 
   view.webContents.removeAllListeners('did-start-loading')
   view.webContents.on('did-start-loading', () => {
     playerController.setState(PLAYER_STATE.LOADING, `did-start-loading ${serviceId}`)
-  })
-
-  view.webContents.removeAllListeners('did-fail-load')
-  view.webContents.on('did-fail-load', () => {
-    playerController.setState(PLAYER_STATE.ERROR, `did-fail-load ${serviceId}`)
   })
 
   view.webContents.on('did-finish-load', () => {
@@ -789,6 +1594,11 @@ function createServiceView(serviceId, url) {
   })
 
   views[serviceId] = view
+  viewMetrics.viewsCreated += 1
+  trackViewCount()
+  // Registrar el adaptador del servicio para enrutar acciones por vista activa.
+  const adapter = new BrowserViewAdapter(serviceId, () => views[serviceId])
+  adapterManager.register(serviceId, adapter)
   webContentsToService.set(view.webContents.id, serviceId)
 
   view.webContents.on('destroyed', () => {
@@ -798,6 +1608,26 @@ function createServiceView(serviceId, url) {
       playerController.setState(PLAYER_STATE.NOT_LOADED, `destroyed ${serviceId}`)
     }
   })
+
+  const loadController = createLoadController(serviceId)
+  try {
+    if (view.webContents.getURL() !== url) {
+      await loadURLWithTimeout(view.webContents, url, loadController.signal, 10000)
+    }
+  } catch (error) {
+    if (error?.message === 'load_cancelled') {
+      destroyBrowserViewInstance(view, serviceId)
+      throw error
+    }
+    viewMetrics.loadFailures += 1
+    destroyBrowserViewInstance(view, serviceId)
+    throw error
+  } finally {
+    const currentController = loadAbortControllers.get(serviceId)
+    if (currentController === loadController) {
+      loadAbortControllers.delete(serviceId)
+    }
+  }
 
   return view
 }
@@ -833,347 +1663,109 @@ function applyVolumeToWebContents(webContents, volume) {
   `, { requireReady: false, retries: 1, label: 'set-volume' }).catch(() => false)
 }
 
+function enqueueServiceSwitch(serviceId, url, serviceData) {
+  pendingSwitchCount += 1
+  switchQueue = switchQueue
+    .then(() => switchToService(serviceId, url, serviceData))
+    .catch((error) => {
+      logger.error('BrowserView', 'switch_queue_failed', {
+        serviceId,
+        message: error?.message || 'unknown_error',
+      })
+    })
+    .finally(() => {
+      pendingSwitchCount = Math.max(0, pendingSwitchCount - 1)
+    })
+  return switchQueue
+}
+
 async function switchToService(serviceId, url, serviceData) {
-  if (!mainWindow || mainWindow.isDestroyed()) return
-  if (activeView && activeView === views[serviceId] && playerController.state === PLAYER_STATE.READY) {
-    return
-  }
-
-  const previousServiceId = playerController.activeServiceId
-
-  playerController.activeServiceId = serviceId
-  playerController.setState(PLAYER_STATE.LOADING, `switch ${serviceId}`)
-
-  if (activeView) {
-    try {
-      // Mutear inmediatamente para evitar overlap de audio.
-      if (!activeView.webContents.isDestroyed()) {
-        activeView.webContents.setAudioMuted(true)
-      }
-
-      // Pausar con timeout de seguridad.
-      await Promise.race([
-        executeInWebContents(activeView.webContents, `
-          (() => {
-            for (const btn of document.querySelectorAll('button')) {
-              const label = (btn.getAttribute('aria-label') || '')
-                .toLowerCase()
-              if ((label.includes('pause') || label.includes('pausar'))
-                  && !btn.disabled && btn.offsetParent !== null) {
-                btn.click()
-                return true
-              }
-            }
-            return false
-          })()
-        `, { requireReady: false, retries: 1, label: 'pause-previous-service' }).catch(() => false),
-        new Promise((r) => setTimeout(r, 500))
-      ])
-    } catch (_) {}
-
-    try { mainWindow.removeBrowserView(activeView) } catch (_) {}
-    if (previousServiceId && previousServiceId !== serviceId) {
-      destroyBrowserViewInstance(activeView, previousServiceId)
+  return measureIfDebug('switch_service', async () => {
+    const switchStartedAt = Date.now()
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (activeView && activeView === views[serviceId] && playerController.state === PLAYER_STATE.READY) {
+      return
     }
-  }
 
-  const nextView = createServiceView(serviceId, url)
+    const previousServiceId = playerController.activeServiceId
+    playerController.activeServiceId = serviceId
+    playerController.setState(PLAYER_STATE.LOADING, `switch ${serviceId}`)
 
-  if (!nextView.webContents.isDestroyed()) {
-    nextView.webContents.setAudioMuted(false)
-  }
+    if (activeView) {
+      try {
+        if (!activeView.webContents.isDestroyed()) {
+          activeView.webContents.setAudioMuted(true)
+        }
+      } catch (_) {}
 
-  mainWindow.addBrowserView(nextView)
-  activeView = nextView
-  Object.entries(views).forEach(([id, view]) => {
-    try {
-      if (!view.webContents.isDestroyed()) {
-        view.webContents.setAudioMuted(id !== serviceId)
+      try { mainWindow.removeBrowserView(activeView) } catch (_) {}
+      if (previousServiceId && previousServiceId !== serviceId) {
+        destroyBrowserViewInstance(activeView, previousServiceId)
       }
-    } catch (_) {}
-  })
-  setTimeout(applyViewBounds, 50)
+    }
 
-  mainWindow.webContents.send('service:active', {
-    serviceId,
-    color: serviceData?.color || '#fc3c44',
-    name: serviceData?.name || serviceId,
+    let nextView = views[serviceId]
+    if (!nextView || nextView.webContents.isDestroyed()) {
+      nextView = await createServiceView(serviceId, url)
+    }
+
+    if (!nextView || nextView.webContents.isDestroyed()) {
+      throw new Error(`failed_to_create_view:${serviceId}`)
+    }
+
+    if (!mainWindow.isDestroyed()) {
+      mainWindow.addBrowserView(nextView)
+    }
+    activeView = nextView
+    viewMetrics.switches += 1
+
+    if (!nextView.webContents.isDestroyed()) {
+      nextView.webContents.setAudioMuted(false)
+    }
+
+    adapterManager.setActive(serviceId)
+    playbackState.update({ service: serviceId })
+    Object.entries(views).forEach(([id, view]) => {
+      try {
+        if (!view.webContents.isDestroyed()) {
+          view.webContents.setAudioMuted(id !== serviceId)
+        }
+      } catch (_) {}
+    })
+    setTimeout(applyViewBounds, 50)
+
+    mainWindow.webContents.send('service:active', {
+      serviceId,
+      color: serviceData?.color || '#fc3c44',
+      name: serviceData?.name || serviceId,
+    })
+
+    const latencyMs = Date.now() - switchStartedAt
+    performanceMetrics.switchLatencySamples += 1
+    performanceMetrics.switchLatencyTotalMs += latencyMs
+    performanceMetrics.switchLatencyMaxMs = Math.max(performanceMetrics.switchLatencyMaxMs, latencyMs)
+    logger.info('Performance', 'switch_latency', {
+      serviceId,
+      targetUrl: url,
+      latencyMs,
+    })
   })
 }
 
-async function runPlayerAction(action) {
-  if (!activeView?.webContents) return
-  if (activeView.webContents.isDestroyed()) return
-  if (playerController.state !== PLAYER_STATE.READY) {
-    playerController.log('ignored action while not ready:', action, playerController.state)
-    return
-  }
-
-  const mediaKeys = {
-    play: 'MediaPlayPause',
-    next: 'MediaNextTrack',
-    previous: 'MediaPreviousTrack',
-  }
-
-  // Enfocar la vista activa para mejorar la recepcion de input events.
-  try {
-    activeView.webContents.focus()
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus()
-  } catch (_) {}
-
-  const scripts = {
-    play: `(() => {
-      const selectors = [
-        '[data-testid="control-button-playpause"]',
-        '[data-testid="play-pause-btn"]',
-        'button.play-pause-btn',
-        'amp-chrome-player .playback-play',
-        '.player-controls .playback-play',
-        '[aria-label="Play"]',
-        '[aria-label="Pause"]',
-        '[aria-label="Reproducir"]',
-        '[aria-label="Pausar"]',
-        '[aria-label*="Play"]',
-        '[aria-label*="Pause"]',
-        '[aria-label*="Reproducir"]',
-        '[aria-label*="Pausar"]',
-        'tp-yt-paper-icon-button[title*="Play"]',
-        'tp-yt-paper-icon-button[title*="Pause"]',
-      ]
-
-      const words = ['play', 'pause', 'reproducir', 'pausar']
-
-      function allRoots(start = document) {
-        const roots = [start]
-        const queue = [start]
-        while (queue.length) {
-          const node = queue.shift()
-          const elements = node.querySelectorAll ? node.querySelectorAll('*') : []
-          for (const el of elements) {
-            if (el.shadowRoot) {
-              roots.push(el.shadowRoot)
-              queue.push(el.shadowRoot)
-            }
-          }
-        }
-        return roots
-      }
-
-      function canClick(el) {
-        if (!el || el.disabled) return false
-        const style = window.getComputedStyle(el)
-        if (style.visibility === 'hidden' || style.display === 'none') return false
-        return true
-      }
-
-      function click(el) {
-        if (!canClick(el)) return false
-        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
-        el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
-        el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-        return true
-      }
-
-      for (const root of allRoots()) {
-        for (const sel of selectors) {
-          const el = root.querySelector?.(sel)
-          if (click(el)) return 'selector:' + sel
-        }
-      }
-
-      for (const root of allRoots()) {
-        const buttons = root.querySelectorAll?.('button,[role="button"],tp-yt-paper-icon-button') || []
-        for (const el of buttons) {
-          const text = [
-            el.getAttribute('aria-label') || '',
-            el.getAttribute('title') || '',
-            el.textContent || ''
-          ].join(' ').toLowerCase()
-
-          if (words.some((w) => text.includes(w)) && click(el)) {
-            return 'label:' + text.slice(0, 80)
-          }
-        }
-      }
-
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true }))
-      document.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', code: 'Space', bubbles: true }))
-      return 'fallback:space'
-    })()`,
-
-    next: `(() => {
-      const selectors = [
-        '[data-testid="control-button-skip-forward"]',
-        '[data-testid="next-btn"]',
-        '[aria-label="Next"]',
-        '[aria-label="Siguiente"]',
-        '[aria-label*="Next"]',
-        '[aria-label*="Siguiente"]',
-        '[title*="Next"]',
-        '[title*="Siguiente"]',
-        'tp-yt-paper-icon-button[title*="Next"]',
-        'tp-yt-paper-icon-button[title*="Siguiente"]',
-      ]
-
-      const words = ['next', 'siguiente', 'skip forward']
-
-      function allRoots(start = document) {
-        const roots = [start]
-        const queue = [start]
-        while (queue.length) {
-          const node = queue.shift()
-          const elements = node.querySelectorAll ? node.querySelectorAll('*') : []
-          for (const el of elements) {
-            if (el.shadowRoot) {
-              roots.push(el.shadowRoot)
-              queue.push(el.shadowRoot)
-            }
-          }
-        }
-        return roots
-      }
-
-      function canClick(el) {
-        if (!el || el.disabled) return false
-        const style = window.getComputedStyle(el)
-        if (style.visibility === 'hidden' || style.display === 'none') return false
-        return true
-      }
-
-      function click(el) {
-        if (!canClick(el)) return false
-        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
-        el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
-        el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-        return true
-      }
-
-      for (const root of allRoots()) {
-        for (const sel of selectors) {
-          const el = root.querySelector?.(sel)
-          if (click(el)) return 'selector:' + sel
-        }
-      }
-
-      for (const root of allRoots()) {
-        const buttons = root.querySelectorAll?.('button,[role="button"],tp-yt-paper-icon-button') || []
-        for (const el of buttons) {
-          const text = [
-            el.getAttribute('aria-label') || '',
-            el.getAttribute('title') || '',
-            el.textContent || ''
-          ].join(' ').toLowerCase()
-
-          if (words.some((w) => text.includes(w)) && click(el)) {
-            return 'label:' + text.slice(0, 80)
-          }
-        }
-      }
-
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', code: 'ArrowRight', bubbles: true }))
-      document.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowRight', code: 'ArrowRight', bubbles: true }))
-      return 'fallback:arrow-right'
-    })()`,
-
-    previous: `(() => {
-      const selectors = [
-        '[data-testid="control-button-skip-back"]',
-        '[data-testid="previous-btn"]',
-        '[aria-label="Previous"]',
-        '[aria-label="Anterior"]',
-        '[aria-label*="Previous"]',
-        '[aria-label*="Anterior"]',
-        '[title*="Previous"]',
-        '[title*="Anterior"]',
-        'tp-yt-paper-icon-button[title*="Previous"]',
-        'tp-yt-paper-icon-button[title*="Anterior"]',
-      ]
-
-      const words = ['prev', 'previous', 'anterior', 'skip back']
-
-      function allRoots(start = document) {
-        const roots = [start]
-        const queue = [start]
-        while (queue.length) {
-          const node = queue.shift()
-          const elements = node.querySelectorAll ? node.querySelectorAll('*') : []
-          for (const el of elements) {
-            if (el.shadowRoot) {
-              roots.push(el.shadowRoot)
-              queue.push(el.shadowRoot)
-            }
-          }
-        }
-        return roots
-      }
-
-      function canClick(el) {
-        if (!el || el.disabled) return false
-        const style = window.getComputedStyle(el)
-        if (style.visibility === 'hidden' || style.display === 'none') return false
-        return true
-      }
-
-      function click(el) {
-        if (!canClick(el)) return false
-        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
-        el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
-        el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-        return true
-      }
-
-      for (const root of allRoots()) {
-        for (const sel of selectors) {
-          const el = root.querySelector?.(sel)
-          if (click(el)) return 'selector:' + sel
-        }
-      }
-
-      for (const root of allRoots()) {
-        const buttons = root.querySelectorAll?.('button,[role="button"],tp-yt-paper-icon-button') || []
-        for (const el of buttons) {
-          const text = [
-            el.getAttribute('aria-label') || '',
-            el.getAttribute('title') || '',
-            el.textContent || ''
-          ].join(' ').toLowerCase()
-
-          if (words.some((w) => text.includes(w)) && click(el)) {
-            return 'label:' + text.slice(0, 80)
-          }
-        }
-      }
-
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', code: 'ArrowLeft', bubbles: true }))
-      document.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowLeft', code: 'ArrowLeft', bubbles: true }))
-      return 'fallback:arrow-left'
-    })()`
-  }
-
-  if (!scripts[action]) return
-
-  try {
-    const result = await executeInWebContents(
-      activeView.webContents,
-      scripts[action],
-      { requireReady: true, retries: 2, label: `action:${action}` }
-    )
-    console.log(`Player action [${action}] -> ${result}`)
-  } catch (err) {
-    if (mediaKeys[action]) {
-      try {
-        activeView.webContents.sendInputEvent({
-          type: 'keyDown',
-          keyCode: mediaKeys[action],
-        })
-        activeView.webContents.sendInputEvent({
-          type: 'keyUp',
-          keyCode: mediaKeys[action],
-        })
-      } catch (_) {}
+async function runPlayerAction(action, ...args) {
+  return retryManager.execute(async () => {
+    const result = await adapterManager.execute(action, ...args)
+    if (!result?.success) {
+      throw new Error(result?.reason || result?.error || 'adapter_action_failed')
     }
-    console.error(`Player action [${action}] failed:`, err.message)
-  }
+    if (healthMonitor) healthMonitor.recordAdapterAction()
+    return result
+  }, {
+    label: `player_action:${action}`,
+    maxAttempts: 3,
+    initialDelayMs: 120,
+    maxDelayMs: 1500,
+  })
 }
 
 function registerIpcHandlers() {
@@ -1184,14 +1776,41 @@ function registerIpcHandlers() {
     'player:action',
     'player:volume',
     'player:seek',
+    'player:seek-to',
     'mini:toggle',
+    'health:mediaSession',
     'media:update',
+    'fallback:retry-manual',
+    'fallback:safe-mode',
   ].forEach((channel) => ipcMain.removeAllListeners(channel))
 
-  ipcMain.on('service:switch', async (_e, { serviceId, url, service }) => {
+  const performServiceSwitch = async (payload) => {
+    if (!payload || !isNonEmptyString(payload.serviceId) || !isNonEmptyString(payload.url)) {
+      logger.warn('IPC', 'invalid_service_switch_payload', { payload })
+      return { success: false, error: 'invalid_payload' }
+    }
+    const { serviceId, url, service } = payload
+    try {
+      const parsed = new URL(url)
+      // Hardening: bloquear URLs fuera de los origenes de servicios permitidos.
+      if (!ALLOWED_SERVICE_ORIGINS.has(parsed.origin)) {
+        logger.warn('IPC', 'blocked_service_switch_origin', { origin: parsed.origin, serviceId })
+        return { success: false, error: 'blocked_origin' }
+      }
+    } catch {
+      logger.warn('IPC', 'invalid_service_switch_url', { serviceId, url })
+      return { success: false, error: 'invalid_url' }
+    }
     store.set('lastService', { serviceId, url, service })
-    await switchToService(serviceId, url, service)
+    await enqueueServiceSwitch(serviceId, url, service)
+    return { success: true }
+  }
+
+  ipcMain.on('service:switch', async (_e, payload) => {
+    await performServiceSwitch(payload)
   })
+
+  ipcMain.handle('service:switch', async (_e, payload) => performServiceSwitch(payload))
 
   ipcMain.handle('services:getLast', () => store.get('lastService', null))
 
@@ -1232,10 +1851,18 @@ function registerIpcHandlers() {
   })
 
   ipcMain.on('player:action', (_e, action) => {
+    if (!isNonEmptyString(action)) {
+      logger.warn('IPC', 'invalid_player_action', { action })
+      return
+    }
     runPlayerAction(action).catch(() => {})
   })
 
   ipcMain.on('player:volume', (_e, volume) => {
+    if (!isFiniteNumber(volume)) {
+      logger.warn('IPC', 'invalid_volume_payload', { volume })
+      return
+    }
     if (!activeView?.webContents) return
     if (activeView.webContents.isDestroyed()) return
 
@@ -1247,6 +1874,10 @@ function registerIpcHandlers() {
   })
 
   ipcMain.on('player:seek', (_e, positionSeconds) => {
+    if (!isFiniteNumber(positionSeconds)) {
+      logger.warn('IPC', 'invalid_seek_payload', { positionSeconds })
+      return
+    }
     if (!activeView?.webContents) return
     if (activeView.webContents.isDestroyed()) return
 
@@ -1280,6 +1911,22 @@ function registerIpcHandlers() {
     `, { requireReady: false, retries: 1, label: 'seek' }).catch(() => false)
   })
 
+  // Soporte de seek absoluto para controles de Media Session del sistema.
+  ipcMain.on('player:seek-to', (_e, positionSeconds) => {
+    if (!isFiniteNumber(positionSeconds)) {
+      logger.warn('IPC', 'invalid_seek_to_payload', { positionSeconds })
+      return
+    }
+    const safePosition = Math.max(0, Number(positionSeconds) || 0)
+    adapterManager.execute('seek', safePosition).catch(() => {})
+  })
+
+  // Reportes de errores del preload/renderer para trazabilidad centralizada.
+  ipcMain.on('melo:reportError', (_e, payload) => {
+    const normalized = sanitizeErrorPayload(payload)
+    logger.error('Renderer', 'reported_error', normalized)
+  })
+
   ipcMain.on('mini:toggle', () => {
     toggleMiniPlayer()
   })
@@ -1302,8 +1949,78 @@ function registerIpcHandlers() {
     }
   })
 
+  ipcMain.handle('debug:metrics', () => getViewMetrics())
+  ipcMain.handle('fallback:status', () => ({ ...fallbackStatus }))
+  ipcMain.handle('fallback:retry-manual', async () => {
+    updateFallbackStatus({
+      phase: 'manual_retry',
+      message: 'Retrying renderer manually...',
+      mitigated: false,
+    })
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.reloadIgnoringCache()
+    }
+    const serviceId = playerController.activeServiceId
+    if (serviceId && SERVICES[serviceId]) {
+      await enqueueServiceSwitch(serviceId, SERVICES[serviceId].url, SERVICES[serviceId])
+    }
+    return { success: true }
+  })
+
+  ipcMain.handle('fallback:safe-mode', () => {
+    updateFallbackStatus({
+      phase: 'safe_mode',
+      stage: 'no-sandbox',
+      message: 'Restarting app in safe mode...',
+      mitigated: false,
+    })
+    const args = process.argv.slice(1)
+    if (!args.includes(RENDERER_FALLBACK_FLAGS.gpu)) args.push(RENDERER_FALLBACK_FLAGS.gpu)
+    if (!args.includes(RENDERER_FALLBACK_FLAGS.sandbox)) args.push(RENDERER_FALLBACK_FLAGS.sandbox)
+    app.relaunch({ args })
+    app.exit(0)
+    return { success: true }
+  })
+
+  ipcMain.handle('debug:health', () => {
+    if (!healthMonitor) return { status: 'unknown', reason: 'not_initialized' }
+    return healthMonitor.check()
+  })
+
+  ipcMain.handle('debug:crash-view', (_event, payload = {}) => {
+    const serviceId = payload?.serviceId
+    if (!isNonEmptyString(serviceId)) {
+      return { success: false, error: 'invalid_serviceId' }
+    }
+
+    const view = views[serviceId]
+    if (!view?.webContents || view.webContents.isDestroyed()) {
+      return { success: false, error: 'view_not_found' }
+    }
+
+    try {
+      view.webContents.forcefullyCrashRenderer()
+      return {
+        success: true,
+        serviceId,
+        activeService: playerController.activeServiceId,
+        isActive: playerController.activeServiceId === serviceId,
+      }
+    } catch (error) {
+      return { success: false, error: error?.message || 'crash_failed' }
+    }
+  })
+
+  ipcMain.handle('debug:validate-load-cancellation', async () => runLoadCancellationValidation())
+  ipcMain.handle('debug:validate-health', async () => runHealthValidation())
+  ipcMain.handle('debug:run-stress', async (_event, payload = {}) => {
+    return runStressValidation(payload)
+  })
+  ipcMain.handle('debug:run-smoke', async () => runSmokeValidation())
+
   ipcMain.on('media:update', (event, data) => {
     if (!mainWindow || mainWindow.isDestroyed()) return
+    if (!data || typeof data !== 'object') return
     const serviceId = webContentsToService.get(event.sender.id)
     if (!serviceId || !data) return
 
@@ -1315,92 +2032,92 @@ function registerIpcHandlers() {
 
     if (!isActiveService) return
 
-    // Deteccion mejorada: Apple Music a veces no reporta `playing` en Media Session.
-    const isPlaying = (
-      data.state === 'playing' ||
-      (data.title != null && data.state !== 'paused' && data.state !== 'none')
-    )
+    const now = Date.now()
+    const trackId = `${data.title}-${data.artist}-${serviceId}`
+    const isNewTrack = trackId !== _lastMediaTitle
 
-    const trackId = data.title ? `${data.title}-${data.artist || ''}` : null
+    // Estado central para evitar desincronizacion entre backend y UI.
+    playbackState.update({
+      trackId,
+      title: data.title,
+      artist: data.artist,
+      album: data.album,
+      artwork: data.artwork,
+      isPlaying: data.isPlaying ?? data.state === 'playing',
+      service: serviceId,
+    })
+
     store.set('currentTrackId', trackId)
 
-    if (store.get('sleepAfterSong', false)) {
-      if (!sleepAfterSongAnchor && trackId) {
-        sleepAfterSongAnchor = trackId
-      } else if (trackId && sleepAfterSongAnchor && trackId !== sleepAfterSongAnchor) {
-        clearSleepTimer()
-        triggerSleepNow().catch(() => {})
+    const shouldUpdate = isNewTrack
+      || now - _lastProgressUpdate > PROGRESS_UPDATE_INTERVAL
+
+    if (shouldUpdate) {
+      _lastProgressUpdate = now
+      mainWindow.webContents.send('media:update', {
+        serviceId,
+        ...data,
+        isPlaying: playbackState.state.isPlaying,
+      })
+
+      if (miniWindow && !miniWindow.isDestroyed()) {
+        miniWindow.webContents.send('media:update', {
+          serviceId,
+          ...data,
+          isPlaying: playbackState.state.isPlaying,
+        })
       }
     }
 
-    const signature = [
-      data.title || '',
-      data.artist || '',
-      data.album || '',
-      data.artwork || '',
-      isPlaying ? '1' : '0',
-    ].join('|')
-
-    if (lastMediaSignatureByService.get(serviceId) === signature) {
-      return
-    }
-    lastMediaSignatureByService.set(serviceId, signature)
-
-    mainWindow.webContents.send('media:update', {
-      serviceId,
-      ...data,
-      isPlaying,
-    })
-
-    if (miniWindow && !miniWindow.isDestroyed()) {
-      miniWindow.webContents.send('media:update', {
+    if (isNewTrack) {
+      _lastMediaTitle = trackId
+      logger.info('Playback', 'track_changed', {
+        title: data.title,
+        artist: data.artist || null,
         serviceId,
-        ...data,
-        isPlaying,
       })
-    }
 
-    updateTrayTrack({
-      title: data.title,
-      artist: data.artist,
-    })
+      updateTrayTrack({ title: data.title, artist: data.artist })
+      trackPlay(data, serviceId)
 
-    trackPlay(data, serviceId)
+      if (store.get('notificationsEnabled', true) && data.title) {
+        notifyTrackChange(data).catch(() => {})
+      }
 
-    if (store.get('notificationsEnabled', true) && data.title) {
-      notifyTrackChange({
-        title: data.title,
-        artist: data.artist,
-        artwork: data.artwork,
-      }).catch(() => {})
-    }
+      if (store.get('discordEnabled', false) && data.title) {
+        const service = Object.values(SERVICES).find((s) => s.id === serviceId)
+        discord.updatePresence({
+          title: data.title,
+          artist: data.artist,
+          serviceName: service?.name,
+        }).catch(() => {})
+      }
 
-    if (store.get('discordEnabled', false) && data.title) {
-      const service = Object.values(SERVICES)
-        .find((s) => s.id === serviceId)
-      discord.updatePresence({
-        title: data.title,
-        artist: data.artist,
-        serviceName: service?.name,
-      }).catch(() => {})
-    }
-
-    if (store.get('lastfmEnabled', false) && data.title) {
-      const trackId = `${data.title}-${data.artist || ''}`
-      lastfm.updateNowPlaying(data).catch(() => {})
-      if (trackId !== lastScrobbled) {
-        clearTimeout(scrobbleTimeout)
-        scrobbleTimeout = setTimeout(() => {
-          lastfm.scrobble(data).catch(() => {})
-          lastScrobbled = trackId
-        }, 30000)
+      if (store.get('lastfmEnabled', false) && data.title) {
+        const tId = `${data.title}-${data.artist || ''}`
+        lastfm.updateNowPlaying(data).catch(() => {})
+        if (tId !== lastScrobbled) {
+          clearTimeout(scrobbleTimeout)
+          scrobbleTimeout = setTimeout(() => {
+            lastfm.scrobble(data).catch(() => {})
+            lastScrobbled = tId
+          }, 30000)
+        }
       }
     }
   })
 
-  ipcMain.handle('stats:getHistory', (_e, { limit = 100, offset = 0 } = {}) => {
+  ipcMain.on('health:mediaSession', (_event, payload) => {
+    if (!healthMonitor) return
+    const available = payload?.available !== false
+    healthMonitor.setMediaSessionAvailable(available)
+  })
+
+  ipcMain.handle('stats:getHistory', (_e, payload = {}) => {
+    const { limit = 100, offset = 0 } = payload || {}
+    if (!isFiniteNumber(limit) || !isFiniteNumber(offset)) return []
     const plays = history.get('plays', [])
-    return plays.slice(offset, offset + limit)
+    return plays.slice(Number(offset), Number(offset) + Number(limit))
   })
 
   ipcMain.handle('stats:getSummary', () => {
@@ -1413,46 +2130,23 @@ function registerIpcHandlers() {
   }))
 
   ipcMain.handle('player:getProgress', async () => {
-    if (!activeView?.webContents) return { position: 0, duration: 0 }
-    if (activeView.webContents.isDestroyed()) return { position: 0, duration: 0 }
-
+    // Consultar progreso via adaptador para unificar la fuente de verdad.
     try {
-      const progress = await executeInWebContents(activeView.webContents, `
-        (() => {
-          const mediaElements = []
-          const stack = [document]
-
-          while (stack.length) {
-            const root = stack.pop()
-            if (!root) continue
-
-            if (root.querySelectorAll) {
-              root.querySelectorAll('audio,video').forEach((m) => mediaElements.push(m))
-              root.querySelectorAll('*').forEach((el) => {
-                if (el.shadowRoot) stack.push(el.shadowRoot)
-              })
-            }
-          }
-
-          for (const media of mediaElements) {
-            if (!Number.isFinite(media.duration) || media.duration <= 0) continue
-            return {
-              position: Number(media.currentTime) || 0,
-              duration: Number(media.duration) || 0,
-            }
-          }
-
-          return { position: 0, duration: 0 }
-        })()
-      `, { requireReady: false, retries: 1, label: 'get-progress' })
-
-      return progress || { position: 0, duration: 0 }
+      const result = await adapterManager.execute('getProgress')
+      if (result?.success && result.result?.duration > 0) {
+        return result.result
+      }
+      return {
+        position: playbackState.state.currentTime || 0,
+        duration: playbackState.state.duration || 0,
+      }
     } catch (_) {
       return { position: 0, duration: 0 }
     }
   })
 
-  ipcMain.handle('stats:getWrapped', (_e, { from, to } = {}) => {
+  ipcMain.handle('stats:getWrapped', (_e, payload = {}) => {
+    const { from, to } = payload || {}
     const plays = history.get('plays', [])
     const filtered = plays.filter((p) => {
       if (from && p.playedAt < from) return false
@@ -1477,7 +2171,12 @@ function registerIpcHandlers() {
     return true
   })
 
-  ipcMain.handle('discord:toggle', async (_e, { enabled, clientId }) => {
+  ipcMain.handle('discord:toggle', async (_e, payload = {}) => {
+    if (typeof payload.enabled !== 'boolean') {
+      logger.warn('IPC', 'invalid_discord_payload', { payload })
+      return false
+    }
+    const { enabled, clientId } = payload
     store.set('discordEnabled', enabled)
     if (typeof clientId === 'string') store.set('discordClientId', clientId)
 
@@ -1493,6 +2192,10 @@ function registerIpcHandlers() {
   ipcMain.handle('discord:status', () => discord.isConnected())
 
   ipcMain.handle('lastfm:configure', (_e, cfg) => {
+    if (!cfg || typeof cfg !== 'object') {
+      logger.warn('IPC', 'invalid_lastfm_config', { cfg })
+      return false
+    }
     store.set('lastfm', cfg)
     store.set('lastfmEnabled', cfg.enabled)
     lastfm.configure(cfg)
@@ -1530,8 +2233,9 @@ function registerIpcHandlers() {
     customTheme: store.get('customTheme', null),
   }))
 
-  ipcMain.handle('settings:save', (_e, { key, value }) => {
-    if (!key) return false
+  ipcMain.handle('settings:save', (_e, payload = {}) => {
+    if (!isNonEmptyString(payload.key)) return false
+    const { key, value } = payload
     store.set(key, value)
     if (key === 'autoUpdateEnabled' && value === true) {
       setupAutoUpdater(mainWindow)
@@ -1540,6 +2244,7 @@ function registerIpcHandlers() {
   })
 
   ipcMain.handle('window:action', (_e, action) => {
+    if (!isNonEmptyString(action)) return false
     if (!mainWindow || mainWindow.isDestroyed()) return false
     if (action === 'minimize') mainWindow.minimize()
     if (action === 'maximize-toggle') {
@@ -1551,56 +2256,14 @@ function registerIpcHandlers() {
     return true
   })
 
-  ipcMain.handle('notification:show', (_e, { title, body, silent }) => {
+  ipcMain.handle('notification:show', (_e, payload = {}) => {
+    if (!payload || typeof payload !== 'object') return false
+    const { title, body, silent } = payload
+    if (!isNonEmptyString(title)) return false
     new Notification({ title, body, silent: silent ?? true }).show()
+    return true
   })
 
-  ipcMain.handle('sleep:set', async (_e, { minutes, afterSong }) => {
-    clearSleepTimer()
-
-    if (afterSong) {
-      store.set('sleepAfterSong', true)
-      store.set('sleepActive', true)
-      sleepAfterSongAnchor = store.get('currentTrackId', null)
-      store.delete('sleepEndsAt')
-      return { active: true, afterSong: true }
-    }
-
-    if (!minutes || minutes <= 0) {
-      store.set('sleepActive', false)
-      store.set('sleepAfterSong', false)
-      store.delete('sleepEndsAt')
-      return { active: false }
-    }
-
-    const ms = minutes * 60 * 1000
-    const endsAt = Date.now() + ms
-
-    store.set('sleepActive', true)
-    store.set('sleepAfterSong', false)
-    store.set('sleepEndsAt', endsAt)
-
-    sleepTimer = setTimeout(async () => {
-      await triggerSleepNow()
-    }, ms)
-
-    return { active: true, endsAt }
-  })
-
-  ipcMain.handle('sleep:cancel', () => {
-    clearSleepTimer()
-    store.set('sleepActive', false)
-    store.set('sleepAfterSong', false)
-    store.delete('sleepEndsAt')
-    sleepAfterSongAnchor = null
-    return { active: false }
-  })
-
-  ipcMain.handle('sleep:status', () => ({
-    active: store.get('sleepActive', false),
-    endsAt: store.get('sleepEndsAt', null),
-    afterSong: store.get('sleepAfterSong', false),
-  }))
 }
 
 function registerGlobalShortcuts() {
@@ -1615,13 +2278,49 @@ function registerGlobalShortcuts() {
 }
 
 app.whenReady().then(async () => {
+  const isStressRun = process.env.MELO_RUN_STRESS === '1'
+  const isSmokeRun = process.env.MELO_RUN_SMOKE === '1'
+  const isTestRun = isStressRun || isSmokeRun
+  const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)
+  if (isTestRun && !hasDisplay) {
+    const reportName = isStressRun ? 'stress-report' : 'smoke-report'
+    const invalid = isStressRun
+      ? {
+        verdict: 'INVALID_ENVIRONMENT',
+        reason: 'no_graphical_display',
+        success: false,
+        switches: 0,
+        successfulSwitches: 0,
+      }
+      : {
+        verdict: 'INVALID_ENVIRONMENT',
+        reason: 'no_graphical_display',
+        success: false,
+        details: {
+          DISPLAY: process.env.DISPLAY || '',
+          WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY || '',
+          XDG_SESSION_TYPE: process.env.XDG_SESSION_TYPE || '',
+          XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || '',
+        },
+      }
+    writeTestReport(reportName, invalid)
+    logger.error('Main', 'invalid_environment', invalid)
+    setTimeout(() => app.quit(), 100)
+    return
+  }
+
+  logger.info('Environment', 'runtime_diagnostics', getRuntimeDiagnostics())
+  try {
+    logger.info('Environment', 'gpu_status', app.getGPUFeatureStatus())
+  } catch (_) {}
+
   try {
     if (components?.whenReady) {
       await components.whenReady()
-      console.log('Widevine CDM disponible via Castlabs')
+      logger.info('Main', 'widevine_ready')
     }
   } catch (_) {
-    console.warn('Widevine no disponible')
+    logger.warn('Main', 'widevine_unavailable')
   }
 
   const discordEnabled = store.get('discordEnabled', false)
@@ -1649,9 +2348,25 @@ app.whenReady().then(async () => {
   })
 
   createMainWindow()
+  updateFallbackStatus({
+    phase: fallbackStatus.phase,
+    stage: fallbackStatus.stage,
+    message: fallbackStatus.message,
+    mitigated: fallbackStatus.mitigated,
+  })
   createTray()
   registerIpcHandlers()
   registerGlobalShortcuts()
+  startMetricsReporter(5000)
+
+  healthMonitor = new HealthMonitor(playbackState, logger)
+  healthMonitor.recordAdapterAction()
+  healthMonitor.initialize(5000)
+  healthMonitor.subscribe((status) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('health:status', status)
+    }
+  })
 
   checkConnection()
   networkStatusTimer = setInterval(() => {
@@ -1663,12 +2378,46 @@ app.whenReady().then(async () => {
   }, 5000)
 
   if (DEBUG_PLAYER) {
-    processMetricsTimer = setInterval(() => {
-      logProcessMetrics('heartbeat')
-    }, 30000)
+    startMemoryMonitoring(30000)
   }
   if (store.get('autoUpdateEnabled', true)) {
     setupAutoUpdater(mainWindow)
+  }
+
+  if (process.env.MELO_RUN_STRESS === '1') {
+    const iterations = Number(process.env.MELO_STRESS_SWITCHES || 40)
+    const minDelayMs = Number(process.env.MELO_STRESS_MIN_DELAY || 50)
+    const maxDelayMs = Number(process.env.MELO_STRESS_MAX_DELAY || 300)
+
+    try {
+      const report = await runStressValidation({ iterations, minDelayMs, maxDelayMs })
+      logger.info('StressTest', 'completed', report)
+    } catch (error) {
+      const failedReport = {
+        success: false,
+        error: error?.message || 'stress_failed',
+      }
+      const reportPath = writeTestReport('stress-report', failedReport)
+      logger.error('StressTest', 'failed', { ...failedReport, reportPath })
+    } finally {
+      setTimeout(() => app.quit(), 300)
+    }
+  }
+
+  if (process.env.MELO_RUN_SMOKE === '1') {
+    try {
+      const report = await runSmokeValidation()
+      logger.info('SmokeTest', 'completed', report)
+    } catch (error) {
+      const failedReport = {
+        success: false,
+        error: error?.message || 'smoke_failed',
+      }
+      const reportPath = writeTestReport('smoke-report', failedReport)
+      logger.error('SmokeTest', 'failed', { ...failedReport, reportPath })
+    } finally {
+      setTimeout(() => app.quit(), 300)
+    }
   }
 })
 
@@ -1679,9 +2428,10 @@ app.on('second-instance', () => {
   mainWindow.focus()
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', async () => {
   isQuitting = true
-  cleanupAllResources()
+  // Esperar limpieza completa para evitar procesos huerfanos.
+  await cleanupAllResources()
 })
 
 app.on('window-all-closed', () => {
@@ -1697,6 +2447,10 @@ process.on('exit', () => {
     clearInterval(processMetricsTimer)
     processMetricsTimer = null
   }
+  if (metricsBroadcastTimer) {
+    clearInterval(metricsBroadcastTimer)
+    metricsBroadcastTimer = null
+  }
   if (networkStatusTimer) {
     clearInterval(networkStatusTimer)
     networkStatusTimer = null
@@ -1708,8 +2462,3 @@ app.on('activate', () => {
     createMainWindow()
   }
 })
-
-// En createMainWindow(), justo antes del if (app.isPackaged)
-console.log('__dirname:', __dirname)
-console.log('preload path:', path.join(__dirname, 'preload.js'))
-console.log('renderer path:', path.join(__dirname, 'dist/renderer/index.html'))

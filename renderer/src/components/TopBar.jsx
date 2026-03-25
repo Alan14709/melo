@@ -1,7 +1,6 @@
 import React, { memo } from 'react'
 import { Minus, Square, X, Settings, Music2 } from 'lucide-react'
 import { usePlayerStore } from '../store/usePlayerStore'
-import SleepTimer from './SleepTimer.jsx'
 
 function TopBar({ onSettingsOpen }) {
   const { currentTrack, isPlaying } = usePlayerStore()
@@ -29,7 +28,6 @@ function TopBar({ onSettingsOpen }) {
       </div>
 
       <div className="topbar-right no-drag">
-        <SleepTimer />
         <button
           className="topbar-icon-btn"
           onClick={onSettingsOpen}

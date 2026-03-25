@@ -21,57 +21,6 @@ const AudioVisualizer = memo(function AudioVisualizer({ isPlaying, color }) {
   )
 })
 
-const ProgressBar = memo(function ProgressBar({ color }) {
-  const [position, setPosition] = useState(0)
-  const [current, setCurrent] = useState(0)
-  const [duration, setDuration] = useState(0)
-  const isSeekingRef = useRef(false)
-
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      if (isSeekingRef.current) return
-      try {
-        const result = await window.melo.getProgress()
-        if (result?.duration > 0) {
-          setCurrent(result.position)
-          setDuration(result.duration)
-          setPosition(result.position / result.duration)
-        }
-      } catch (_) {}
-    }, 1000)
-
-    return () => clearInterval(interval)
-  }, [])
-
-  const fmt = (s) => {
-    if (!s || Number.isNaN(s)) return '0:00'
-    const m = Math.floor(s / 60)
-    const sec = Math.floor(s % 60)
-    return `${m}:${sec.toString().padStart(2, '0')}`
-  }
-
-  return (
-    <div className="progress-row no-drag">
-      <span className="progress-time">{fmt(current)}</span>
-      <Slider
-        value={position}
-        color={color}
-        onChange={(val) => {
-          isSeekingRef.current = true
-          setPosition(val)
-          setCurrent(val * duration)
-        }}
-        onChangeEnd={(val) => {
-          isSeekingRef.current = false
-          if (duration > 0) window.melo.seek(val * duration)
-        }}
-        formatTooltip={(val) => fmt(val * duration)}
-      />
-      <span className="progress-time">{fmt(duration)}</span>
-    </div>
-  )
-})
-
 const VolumeControl = memo(function VolumeControl({ color }) {
   const { volumeLevel, setVolumeLevel } = usePlayerStore()
   const [volume, setVolume] = useState(1)
@@ -170,7 +119,6 @@ function PlayerBar() {
       <div className="playerbar-center">
         <div className="playerbar-center-stack">
           <AudioVisualizer isPlaying={isPlaying} color={color} />
-          <ProgressBar color={color} />
         </div>
       </div>
 

@@ -1,6 +1,6 @@
 {
   "name": "melo",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "Tu musica, sin limites",
   "author": {
     "name": "Alan Lemus",
@@ -12,6 +12,11 @@
     "prebuild": "node -e \"require('fs').mkdirSync('dist/renderer', {recursive:true})\"",
     "build": "vite build && electron-builder",
     "start": "electron . --no-sandbox",
+    "test": "npm run test:unit && npm run test:syntax",
+    "test:unit": "node --test tests/*.test.js",
+    "test:syntax": "node --check main.js && node --check preload.js && node --check services/RetryManager.js && node --check services/HealthMonitor.js",
+    "test:stress": "node scripts/stress-test.js",
+    "test:smoke": "node scripts/e2e-smoke.js",
     "postinstall": "electron-builder install-app-deps",
     "release:linux": "vite build && electron-builder --linux",
     "release:mac": "vite build && electron-builder --mac",
@@ -40,7 +45,7 @@
     "zustand": "^4.5.0"
   },
   "build": {
-    "asar": false,
+    "asar": true,
     "appId": "com.melo.app",
     "productName": "Melo",
     "copyright": "Copyright 2025 Melo",
