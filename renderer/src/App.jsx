@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from './store/usePlayerStore'
 import ServicePicker from './components/ServicePicker.jsx'
 import LoginView from './components/LoginView.jsx'
@@ -10,13 +10,16 @@ import CommandPalette from './components/CommandPalette.jsx'
 import StatsView from './components/StatsView.jsx'
 import UpdateBanner from './components/UpdateBanner.jsx'
 import OfflineBanner from './components/OfflineBanner.jsx'
+import FallbackControls from './components/FallbackControls.jsx'
 import { extractPalette } from './utils/colorExtractor'
 import { applyTheme, applyDynamicPalette } from './utils/applyTheme'
 
 export default function App() {
-  const [sleepMenuOpen, setSleepMenuOpen] = useState(false)
   const lastMediaRef = useRef('')
   const lastPlaybackRef = useRef(null)
+  const metadataDebounceRef = useRef(null)
+  const [healthStatus, setHealthStatus] = useState({ status: 'unknown', reason: null })
+  const [fallbackStatus, setFallbackStatus] = useState({ phase: 'idle', message: null, mitigated: false })
   const {
     currentView, setView,
     pendingService, setPendingService,
@@ -62,7 +65,8 @@ export default function App() {
 
   // Escuchar metadata enviada por el preload del BrowserView.
   useEffect(() => {
-    window.melo.onMediaUpdate(async (data) => {
+    // Mantener handlers estables para evitar acumulacion de listeners.
+    const handleMediaUpdate = async (data) => {
       if (!data?.title) return
 
       const mediaSignature = [
@@ -89,12 +93,16 @@ export default function App() {
         setPlaying(nextPlaying)
       }
 
-      if (statsEnabled && data.title) {
-        addToHistory(data)
+      // Leer estado actual desde store para evitar cierres obsoletos.
+      const store = usePlayerStore.getState()
+      if (store.statsEnabled && data.title) {
+        store.addToHistory(data)
       }
 
-      const { dynamicThemeEnabled } = usePlayerStore.getState()
-      if (dynamicThemeEnabled && data.artwork) {
+      // Debounce de metadata visual para bajar costo de extraccion de color.
+      clearTimeout(metadataDebounceRef.current)
+      metadataDebounceRef.current = setTimeout(async () => {
+        if (!store.dynamicThemeEnabled || !data.artwork) return
         try {
           const palette = await extractPalette(data.artwork)
           if (palette) {
@@ -102,47 +110,49 @@ export default function App() {
             setAccentColor(palette.accent)
           }
         } catch (_) {}
-      }
+      }, 150)
+    }
 
-    })
-
-    window.melo.onServiceActive((data) => {
+    const handleServiceActive = (data) => {
       setActiveService(data.serviceId, data.color, data.name)
       addConnectedService(data.serviceId)
+    }
+
+    window.melo.onMediaUpdate(handleMediaUpdate)
+    window.melo.onServiceActive(handleServiceActive)
+    window.melo.health?.onChange?.((status) => {
+      if (status && typeof status === 'object') setHealthStatus(status)
     })
 
+    window.melo.fallback?.onChange?.((status) => {
+      if (status && typeof status === 'object') setFallbackStatus(status)
+    })
+
+    window.melo.health?.getStatus?.().then((status) => {
+      if (status && typeof status === 'object') setHealthStatus(status)
+    }).catch(() => {})
+
+    window.melo.fallback?.getStatus?.().then((status) => {
+      if (status && typeof status === 'object') setFallbackStatus(status)
+    }).catch(() => {})
+
+    // CRITICO: limpiar listeners al desmontar para evitar warnings de MaxListeners.
     return () => {
+      clearTimeout(metadataDebounceRef.current)
       window.melo.removeAllListeners('media:update')
       window.melo.removeAllListeners('service:active')
+      window.melo.removeAllListeners('health:status')
+      window.melo.removeAllListeners('fallback:status')
     }
-  }, [
-    addConnectedService,
-    addToHistory,
-    setActiveService,
-    setAccentColor,
-    setPlaying,
-    setTrack,
-    statsEnabled,
-  ])
+  }, [])
 
   useEffect(() => {
     const { customTheme } = usePlayerStore.getState()
     applyTheme(theme, customTheme)
   }, [theme])
 
-  // BrowserView siempre queda por encima del DOM: ocultarlo al abrir ajustes.
-  useEffect(() => {
-    const onSleepMenu = (event) => {
-      setSleepMenuOpen(Boolean(event?.detail?.open))
-    }
-    window.addEventListener('melo:sleep-menu', onSleepMenu)
-    return () => window.removeEventListener('melo:sleep-menu', onSleepMenu)
-  }, [])
-
   useEffect(() => {
     if (settingsOpen || currentView !== 'player') {
-      window.melo.hideBrowserView()
-    } else if (sleepMenuOpen) {
       window.melo.hideBrowserView()
     } else {
       window.melo.showBrowserView()
@@ -151,7 +161,7 @@ export default function App() {
     return () => {
       window.melo.showBrowserView()
     }
-  }, [currentView, settingsOpen, sleepMenuOpen])
+  }, [currentView, settingsOpen])
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -164,12 +174,12 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [commandPaletteOpen, setCommandPaletteOpen])
 
-  const handleSelectService = (service) => {
+  const handleSelectService = useCallback((service) => {
     setPendingService(service)
     setView('login')
-  }
+  }, [setPendingService, setView])
 
-  const handleConfirmLogin = () => {
+  const handleConfirmLogin = useCallback(() => {
     if (!pendingService) return
     window.melo.switchService(
       pendingService.id,
@@ -178,7 +188,7 @@ export default function App() {
     )
     setView('player')
     setPendingService(null)
-  }
+  }, [pendingService, setPendingService, setView])
 
   return (
     <div className="app-root">
@@ -208,6 +218,7 @@ export default function App() {
             </div>
           </div>
           <PlayerBar />
+          <FallbackControls health={healthStatus} fallbackStatus={fallbackStatus} />
           <OfflineBanner />
           <UpdateBanner />
           <SettingsPanel
@@ -229,6 +240,7 @@ export default function App() {
             <StatsView />
           </div>
           <PlayerBar />
+          <FallbackControls health={healthStatus} fallbackStatus={fallbackStatus} />
           <OfflineBanner />
           <UpdateBanner />
           <SettingsPanel

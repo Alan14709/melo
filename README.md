@@ -9,6 +9,12 @@ Tu musica, sin limites.
 Cliente de escritorio universal para servicios de streaming.
 Apple Music, Spotify, YouTube Music, Tidal y Deezer en una sola app.
 
+## Estado del Proyecto
+
+- Version actual: v1.4.0
+- Objetivo: build estable para uso real en Linux, Windows y macOS
+- Enfoque de estabilidad: fallback de renderer, health monitoring, retry manager y gate de validacion
+
 ## Caracteristicas
 
 - Multi-servicio con sesiones persistentes
@@ -19,6 +25,26 @@ Apple Music, Spotify, YouTube Music, Tidal y Deezer en una sola app.
 - Mini player flotante
 - Temas: Dark, OLED, Light, Nord, Catppuccin y Custom
 - Auto-update
+- Fallback de renderer en Linux (GPU fallback y safe mode)
+- Health monitor con estados y motivos de degradacion
+- Pruebas smoke/stress con reportes JSON
+
+## Novedades v1.4.0
+
+- Diagnostico profundo para fallos de renderer (launch-failed)
+- Logging estructurado para post-mortem y CI
+- Fallback secuencial de relanzamiento:
+  - GPU fallback
+  - no-sandbox fallback (safe mode)
+  - estado exhausted cuando se agotan mitigaciones
+- Metricas de performance:
+  - startup time (main -> renderer ready)
+  - switching latency
+  - tendencia de memoria
+- UX de degradacion mejorada con acciones:
+  - Reintentar manual
+  - Safe Mode
+  - Recargar
 
 ## Descarga
 
@@ -28,9 +54,6 @@ https://github.com/Alan14709/melo/releases/latest
 Linux:   Melo-*.AppImage o melo_*_amd64.deb
 macOS:   Melo-*.dmg
 Windows: Melo-*-setup.exe
-
-NOTA: Si tienes v1.0.0 instalada, actualiza a v1.0.1 inmediatamente.
-La version anterior tiene errores graves.
 
 ## Instalacion Por Plataforma
 
@@ -52,6 +75,26 @@ chmod +x Melo-*.AppImage
 Notas:
 - Si no abre al primer intento, ejecuta desde terminal para ver logs.
 - En algunas distros puede requerirse instalar librerias multimedia del sistema.
+
+### Linux (.deb) Reinstalacion Limpia
+
+Para pruebas de release en entorno limpio:
+
+```bash
+cd /ruta/al/proyecto
+sudo dpkg --purge melo || true
+rm -rf ~/.config/melo ~/.config/melo-wrapper ~/.cache/melo ~/.cache/melo-wrapper ~/.local/share/melo
+sudo dpkg -i dist-electron/melo_1.4.0_amd64.deb
+sudo apt-get install -f -y
+```
+
+Verificar instalacion:
+
+```bash
+dpkg -l | grep -E '^ii\s+melo\s'
+dpkg -s melo | grep -E '^(Package|Version|Status):'
+which melo
+```
 
 ### macOS (DMG)
 
@@ -85,6 +128,25 @@ npm install --registry https://castlabs-electron-registry.s3.amazonaws.com
 npm run dev
 ```
 
+## Gate de Validacion Linux
+
+Se incluye gate automatizado para smoke/stress en build empaquetado:
+
+```bash
+./gate.sh
+```
+
+Resultados:
+
+- `artifacts/summary.json` con veredicto global (`PASS`, `FAIL`, `INVALID_ENVIRONMENT`)
+- `artifacts/run-*/smoke.log` y `artifacts/run-*/stress.log`
+- reportes por corrida y metricas de fallback
+
+Cuando no hay sesion grafica valida (sin `DISPLAY`/`WAYLAND_DISPLAY`), el gate clasifica correctamente:
+
+- `INVALID_ENVIRONMENT`
+- `reason: no_graphical_display`
+
 ## Builds De Distribucion
 
 ```bash
@@ -113,10 +175,21 @@ Melo usa `electron-updater` con GitHub Releases.
 - Publica la release en GitHub.
 - La app detecta nuevas versiones en instalaciones empaquetadas.
 
+## Observabilidad y Debug
+
+- Metricas de runtime disponibles via bridge/debug:
+  - fallback triggers (GPU / no-sandbox)
+  - launch success/failure rate
+  - retry metrics
+  - health metrics
+  - latencia de switching y uso de memoria
+- Logs estructurados para analisis en CI/CD y soporte.
+
 ## Solucion De Problemas
 
 - Linux sandbox/GPU:
-  - Si hay errores de GPU/sandbox, inicia con los scripts de desarrollo del proyecto.
+  - Usa el gate y revisa `artifacts/summary.json` para validar el entorno.
+  - Si hay launch-failed, revisar logs de fallback y estado de renderer.
 - Sin audio o DRM:
   - Verifica que usas la build de Castlabs incluida por el proyecto.
 - Fallo al construir iconos:

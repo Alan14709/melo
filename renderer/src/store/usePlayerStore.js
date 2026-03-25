@@ -1,9 +1,19 @@
 import { create } from 'zustand'
 
+// Debounce para limitar updates frecuentes de progreso en la UI.
+let _progressTimeout = null
+const debouncedSetProgress = (set, value) => {
+  clearTimeout(_progressTimeout)
+  _progressTimeout = setTimeout(() => {
+    set({ progress: value })
+  }, 100)
+}
+
 export const usePlayerStore = create((set) => ({
   // Estado del player
   currentTrack: null,
   isPlaying: false,
+  progress: 0,
   volumeLevel: 1,
 
   // Servicios
@@ -40,6 +50,8 @@ export const usePlayerStore = create((set) => ({
   // Acciones
   setTrack: (track) => set({ currentTrack: track }),
   setPlaying: (v) => set({ isPlaying: v }),
+  // Actualizar progreso con debounce para evitar renderizado excesivo.
+  setProgress: (value) => debouncedSetProgress(set, value),
   setVolumeLevel: (v) => set({ volumeLevel: v }),
 
   setActiveService: (id, color, name) => set({
