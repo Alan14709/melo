@@ -1,6 +1,6 @@
 {
   "name": "melo",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Tu musica, sin limites",
   "author": "Melo Maintainers",
   "main": "main.js",
@@ -68,8 +68,8 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "${env.MELO_PUBLISH_OWNER}",
-      "repo": "${env.MELO_PUBLISH_REPO}",
+      "owner": "Alan14709",
+      "repo": "melo",
       "releaseType": "release"
     },
     "electronDownload": {

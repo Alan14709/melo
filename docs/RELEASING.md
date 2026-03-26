@@ -43,3 +43,14 @@ Artefactos esperados en `dist-electron/`:
 
 No subir binarios manualmente al repo.
 Publicar via flujo de release/tag de GitHub con los artefactos generados.
+
+## 6) CI y manejo de tags existentes
+
+- El workflow de release se dispara con tags `v*`.
+- Si el tag `v1.5.0` ya existe y se cambiaron reglas de CI, no reescribir historia ni borrar tags.
+- Crear un nuevo tag (por ejemplo `v1.5.1`) para re-disparar el workflow:
+
+```bash
+git tag -a v1.5.1 -m "Melo v1.5.1"
+git push origin v1.5.1
+```
