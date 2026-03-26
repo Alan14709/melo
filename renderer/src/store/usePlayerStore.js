@@ -40,7 +40,13 @@ export const usePlayerStore = create((set) => ({
   lastfmApiKey: '',
   lastfmApiSecret: '',
   lastfmSessionKey: '',
+  mediaKeysEnabled: true,
   notificationsEnabled: true,
+
+  // UI/Immersive (Fase 5)
+  immersiveEnabled: false,
+  overlayControlsEnabled: true,
+  overlayPosition: 'bottom',
 
   // Stats (v0.5)
   statsEnabled: true,
@@ -82,7 +88,11 @@ export const usePlayerStore = create((set) => ({
   setLastfmApiKey: (k) => set({ lastfmApiKey: k }),
   setLastfmApiSecret: (k) => set({ lastfmApiSecret: k }),
   setLastfmSessionKey: (k) => set({ lastfmSessionKey: k }),
+  setMediaKeys: (v) => set({ mediaKeysEnabled: v }),
   setNotifications: (v) => set({ notificationsEnabled: v }),
+  setImmersive: (v) => set({ immersiveEnabled: v }),
+  setOverlayControls: (v) => set({ overlayControlsEnabled: v }),
+  setOverlayPosition: (pos) => set({ overlayPosition: pos }),
   setStats: (v) => set({ statsEnabled: v }),
   setAutoUpdate: (v) => set({ autoUpdateEnabled: v }),
   clearPlayHistory: () => set({ playHistory: [] }),
@@ -100,6 +110,11 @@ export const usePlayerStore = create((set) => ({
     lastfmApiKey: settings.lastfm?.apiKey ?? s.lastfmApiKey,
     lastfmApiSecret: settings.lastfm?.apiSecret ?? s.lastfmApiSecret,
     lastfmSessionKey: settings.lastfm?.sessionKey ?? s.lastfmSessionKey,
+    mediaKeysEnabled: settings.mediaKeysEnabled ?? s.mediaKeysEnabled,
+    immersiveEnabled: settings.immersiveEnabled ?? s.immersiveEnabled,
+    overlayControlsEnabled: settings.overlayControlsEnabled ?? s.overlayControlsEnabled,
+    overlayPosition: settings.overlayPosition ?? s.overlayPosition,
+    statsEnabled: settings.statsEnabled ?? s.statsEnabled,
     volumeLevel: settings.volumeLevel ?? s.volumeLevel,
     autoUpdateEnabled: settings.autoUpdateEnabled ?? s.autoUpdateEnabled,
   })),

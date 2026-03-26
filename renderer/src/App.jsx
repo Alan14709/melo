@@ -17,6 +17,7 @@ import { applyTheme, applyDynamicPalette } from './utils/applyTheme'
 export default function App() {
   const lastMediaRef = useRef('')
   const lastPlaybackRef = useRef(null)
+  const lastThemeArtworkRef = useRef('')
   const metadataDebounceRef = useRef(null)
   const [healthStatus, setHealthStatus] = useState({ status: 'unknown', reason: null })
   const [fallbackStatus, setFallbackStatus] = useState({ phase: 'idle', message: null, mitigated: false })
@@ -33,6 +34,7 @@ export default function App() {
     setTheme,
     hydrateSettings,
     setAccentColor,
+    immersiveEnabled,
   } = usePlayerStore()
 
   // Cargar preferencias persistidas desde el proceso principal.
@@ -102,14 +104,33 @@ export default function App() {
       // Debounce de metadata visual para bajar costo de extraccion de color.
       clearTimeout(metadataDebounceRef.current)
       metadataDebounceRef.current = setTimeout(async () => {
-        if (!store.dynamicThemeEnabled || !data.artwork) return
+        // [theme] Re-leer store dentro del debounce para obtener dynamicThemeEnabled actual
+        // (evita captura de snapshot estale cuando el setting cambia)
+        const currentStore = usePlayerStore.getState()
+        if (!currentStore.dynamicThemeEnabled) return
+
+        // Si no hay artwork, reaplique el tema base para limpiar colores de track anterior
+        if (!data.artwork) {
+          lastThemeArtworkRef.current = ''
+          const { theme, customTheme } = currentStore
+          applyTheme(theme, customTheme)
+          return
+        }
+
+        if (lastThemeArtworkRef.current === data.artwork) return
+        lastThemeArtworkRef.current = data.artwork
+
         try {
           const palette = await extractPalette(data.artwork)
           if (palette) {
             applyDynamicPalette(palette)
             setAccentColor(palette.accent)
           }
-        } catch (_) {}
+        } catch (_) {
+          // En caso de error, reaplique el tema base para evitar colores corruptos
+          const { theme, customTheme } = currentStore
+          applyTheme(theme, customTheme)
+        }
       }, 150)
     }
 
@@ -208,7 +229,7 @@ export default function App() {
         <div className="player-layout">
           <TopBar onSettingsOpen={() => setSettingsOpen(true)} />
           <div className="player-body">
-            <Sidebar />
+            {!immersiveEnabled && <Sidebar />}
             <div className="browser-area">
               {settingsOpen && (
                 <div className="browser-placeholder">

@@ -53,6 +53,29 @@ function serializePayload(payload) {
   }
 }
 
+function sanitizeString(value) {
+  if (typeof value !== 'string') return value
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._\-+/=]+/gi, 'Bearer [REDACTED]')
+    .replace(/(token|secret|api[_-]?key|client_secret|authorization)\s*[=:]\s*[^\s,;]+/gi, '$1=[REDACTED]')
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[REDACTED_EMAIL]')
+    .replace(/\/home\/[A-Za-z0-9._-]+/g, '/home/[REDACTED_USER]')
+}
+
+function sanitizePayload(value) {
+  if (value == null) return value
+  if (typeof value === 'string') return sanitizeString(value)
+  if (Array.isArray(value)) return value.map((item) => sanitizePayload(item))
+  if (typeof value === 'object') {
+    const out = {}
+    Object.entries(value).forEach(([k, v]) => {
+      out[k] = sanitizePayload(v)
+    })
+    return out
+  }
+  return value
+}
+
 class Logger {
   constructor() {
     ensureLogDir()
@@ -80,13 +103,14 @@ class Logger {
     if (!this.shouldLog(level)) return
 
     const timestamp = new Date().toISOString()
+    const sanitizedData = sanitizePayload(data ?? null)
     const payload = {
       timestamp,
       sessionId: this.sessionId,
       level,
       module,
       action,
-      data: data ?? null,
+      data: sanitizedData,
     }
 
     const line = `${serializePayload(payload)}\n`

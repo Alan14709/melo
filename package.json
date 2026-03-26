@@ -1,11 +1,8 @@
 {
   "name": "melo",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Tu musica, sin limites",
-  "author": {
-    "name": "Alan Lemus",
-    "email": "alan.lemus.dev@gmail.com"
-  },
+  "author": "Melo Maintainers",
   "main": "main.js",
   "scripts": {
     "dev": "fuser -k 5173/tcp; concurrently \"vite\" \"wait-on tcp:5173 && electron . --no-sandbox\"",
@@ -19,13 +16,11 @@
     "test:smoke": "node scripts/e2e-smoke.js",
     "postinstall": "electron-builder install-app-deps",
     "release:linux": "vite build && electron-builder --linux",
-    "release:mac": "vite build && electron-builder --mac",
-    "release:win": "vite build && electron-builder --win",
-    "release:all": "vite build && electron-builder -mwl",
     "prerelease:publish": "node -e \"require('fs').mkdirSync('dist/renderer', {recursive:true})\"",
     "release:publish": "vite build && electron-builder --publish always"
   },
   "dependencies": {
+    "dbus-next": "^0.10.2",
     "discord-rpc": "^4.0.1",
     "electron-store": "^8.1.0",
     "electron-updater": "^6.3.9"
@@ -73,8 +68,8 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "Alan14709",
-      "repo": "melo",
+      "owner": "${env.MELO_PUBLISH_OWNER}",
+      "repo": "${env.MELO_PUBLISH_REPO}",
       "releaseType": "release"
     },
     "electronDownload": {
@@ -91,28 +86,11 @@
         "--no-sandbox",
         "--disable-setuid-sandbox"
       ],
-      "maintainer": "Alan Lemus <alan.lemus.dev@gmail.com>"
+      "maintainer": "Melo Maintainers"
     },
     "deb": {
       "afterInstall": "packaging/deb-after-install.sh",
       "afterRemove": "packaging/deb-after-remove.sh"
-    },
-    "mac": {
-      "target": [
-        "dmg"
-      ],
-      "category": "public.app-category.music",
-      "icon": "assets/icon.png"
-    },
-    "win": {
-      "target": [
-        "nsis"
-      ],
-      "icon": "assets/icon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
     }
   }
 }

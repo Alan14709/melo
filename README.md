@@ -1,204 +1,180 @@
 # Melo
 
-![Version](https://img.shields.io/github/v/release/Alan14709/melo?label=version)
-![Downloads](https://img.shields.io/github/downloads/Alan14709/melo/total)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
+![Version](https://img.shields.io/badge/version-v1.5.0-success)
+![Downloads](https://img.shields.io/badge/downloads-see%20releases-blue)
+![Platform](https://img.shields.io/badge/platform-Linux-blue)
+![Stack](https://img.shields.io/badge/stack-Electron%20%2B%20React%20%2B%20Vite-black)
 
-Tu musica, sin limites.
+Cliente de escritorio Linux para streaming musical en una sola app.
+Incluye integracion con Apple Music, Spotify, YouTube Music, Tidal y Deezer.
 
-Cliente de escritorio universal para servicios de streaming.
-Apple Music, Spotify, YouTube Music, Tidal y Deezer en una sola app.
+## Que es Melo
 
-## Estado del Proyecto
+Melo es un contenedor de servicios de streaming basado en Electron con enfoque Linux-first.
+El proyecto esta orientado a experiencia de escritorio real y estabilidad operativa:
 
-- Version actual: v1.4.0
-- Objetivo: build estable para uso real en Linux, Windows y macOS
-- Enfoque de estabilidad: fallback de renderer, health monitoring, retry manager y gate de validacion
+- control por bandeja (tray)
+- autostart via .desktop
+- media keys globales
+- notificaciones nativas
+- integracion MPRIS (GNOME/KDE)
 
-## Caracteristicas
+## Estado del proyecto
 
-- Multi-servicio con sesiones persistentes
-- Apple Music con DRM completo (Widevine via Castlabs)
+- Version objetivo de release: v1.5.0
+- Plataforma soportada: Linux
+- Build targets: AppImage y DEB
+- Estado: listo para QA final de release
+
+## Stack tecnico
+
+- Electron (main/preload)
+- React 18 + Zustand (renderer)
+- Vite (build frontend)
+- electron-store (persistencia de settings)
+- dbus-next (MPRIS)
+- discord-rpc (Rich Presence)
+- electron-updater (actualizaciones)
+
+## Arquitectura 
+
+### Main process
+
+- Gestion de BrowserView por servicio activo
+- Orquestacion de IPC
+- Integraciones de sistema (tray, shortcuts, notificaciones, MPRIS)
+- Persistencia de configuraciones
+- Fallback de estabilidad (GPU/sandbox)
+
+### Preload bridge
+
+- API segura expuesta a renderer via contextBridge
+- Wrappers de IPC con manejo de errores
+
+### Renderer
+
+- UI React (views, settings, player shell)
+- Store global Zustand para estado de app
+- Tema dinamico por artwork + fallback de tema base
+
+## Funcionalidad incluida
+
+### Core
+
+- Multi-servicio con ultima sesion recordada
+- Single instance lock + focus de instancia activa
+- Modo inmersivo (oculta sidebar, expande contenido)
+- Volumen persistente
+
+### Integraciones
+
+- Tray menu con acciones rapidas
+- Autostart Linux (`~/.config/autostart/melo.desktop`)
+- Media keys globales (play/pause, next, previous)
+- Notificaciones de cambio de track
+- MPRIS (`org.mpris.MediaPlayer2.melo`)
 - Discord Rich Presence
 - Last.fm scrobbling
-- Estadisticas y Melo Wrapped
-- Mini player flotante
-- Temas: Dark, OLED, Light, Nord, Catppuccin y Custom
-- Auto-update
-- Fallback de renderer en Linux (GPU fallback y safe mode)
-- Health monitor con estados y motivos de degradacion
-- Pruebas smoke/stress con reportes JSON
 
-## Novedades v1.4.0
+### Estabilidad y performance
 
-- Diagnostico profundo para fallos de renderer (launch-failed)
-- Logging estructurado para post-mortem y CI
-- Fallback secuencial de relanzamiento:
-  - GPU fallback
-  - no-sandbox fallback (safe mode)
-  - estado exhausted cuando se agotan mitigaciones
-- Metricas de performance:
-  - startup time (main -> renderer ready)
-  - switching latency
-  - tendencia de memoria
-- UX de degradacion mejorada con acciones:
-  - Reintentar manual
-  - Safe Mode
-  - Recargar
+- Debounce/dedupe de `media:update` en main process
+- Deduplicacion de `PropertiesChanged` en MPRIS
+- Hardening de metadata MPRIS (limpieza en estado idle/stopped)
+- Artwork cache local en `~/.cache/melo/art`
+- Logging verbose desactivado por defecto
 
-## Descarga
+## Estructura relevante del repo
 
-Descarga la ultima version desde:
-https://github.com/Alan14709/melo/releases/latest
+- `main.js`: ciclo de vida Electron + IPC + integraciones
+- `preload.js`: bridge seguro entre renderer y main
+- `renderer/src/`: app React (UI)
+- `integrations/`: Discord, Last.fm, MPRIS, notificaciones, updater
+- `services/`: autostart, cache, health/retry, adapters
+- `tests/`: unit tests de modulos criticos
 
-Linux:   Melo-*.AppImage o melo_*_amd64.deb
-macOS:   Melo-*.dmg
-Windows: Melo-*-setup.exe
+## Instalacion
 
-## Instalacion Por Plataforma
-
-### Linux (AppImage)
-
-1. Descarga `Melo-*.AppImage` desde la seccion **Releases**.
-2. Da permisos de ejecucion:
+### AppImage
 
 ```bash
 chmod +x Melo-*.AppImage
-```
-
-3. Ejecuta la app:
-
-```bash
 ./Melo-*.AppImage
 ```
 
-Notas:
-- Si no abre al primer intento, ejecuta desde terminal para ver logs.
-- En algunas distros puede requerirse instalar librerias multimedia del sistema.
-
-### Linux (.deb) Reinstalacion Limpia
-
-Para pruebas de release en entorno limpio:
+### DEB
 
 ```bash
-cd /ruta/al/proyecto
-sudo dpkg --purge melo || true
-rm -rf ~/.config/melo ~/.config/melo-wrapper ~/.cache/melo ~/.cache/melo-wrapper ~/.local/share/melo
-sudo dpkg -i dist-electron/melo_1.4.0_amd64.deb
+sudo dpkg -i dist-electron/melo_*.deb
 sudo apt-get install -f -y
 ```
 
-Verificar instalacion:
+## Reinstalacion limpia para QA (.deb)
 
 ```bash
-dpkg -l | grep -E '^ii\s+melo\s'
+pkill -f '/melo|Melo' || true
+TS=$(date +%Y%m%d-%H%M%S)
+mkdir -p "$HOME/.melo-backups"
+[ -d "$HOME/.config/melo" ] && mv "$HOME/.config/melo" "$HOME/.melo-backups/melo-config-$TS"
+[ -d "$HOME/.cache/melo" ] && mv "$HOME/.cache/melo" "$HOME/.melo-backups/melo-cache-$TS"
+sudo dpkg --purge melo || true
+sudo dpkg -i dist-electron/melo_*.deb
+sudo apt-get install -f -y
+```
+
+Verificacion rapida:
+
+```bash
 dpkg -s melo | grep -E '^(Package|Version|Status):'
 which melo
 ```
 
-### macOS (DMG)
-
-1. Descarga el archivo `.dmg` desde **Releases**.
-2. Abre el DMG y arrastra **Melo** a `Applications`.
-3. Inicia Melo desde Aplicaciones.
-
-Si macOS bloquea la app por seguridad:
-- Clic derecho sobre Melo -> `Abrir`.
-- O en `System Settings -> Privacy & Security` permite ejecutar la app.
-
-### Windows (EXE)
-
-1. Descarga el instalador `.exe` desde **Releases**.
-2. Ejecuta el instalador.
-3. Sigue el asistente de instalacion (NSIS).
-
-Si SmartScreen muestra advertencia:
-- Selecciona `More info` -> `Run anyway`.
-
-## Instalacion Para Desarrollo
+## Desarrollo
 
 Requisitos:
+
 - Node.js 20+
 - npm
-
-Pasos:
 
 ```bash
 npm install --registry https://castlabs-electron-registry.s3.amazonaws.com
 npm run dev
 ```
 
-## Gate de Validacion Linux
-
-Se incluye gate automatizado para smoke/stress en build empaquetado:
+## Scripts
 
 ```bash
-./gate.sh
-```
-
-Resultados:
-
-- `artifacts/summary.json` con veredicto global (`PASS`, `FAIL`, `INVALID_ENVIRONMENT`)
-- `artifacts/run-*/smoke.log` y `artifacts/run-*/stress.log`
-- reportes por corrida y metricas de fallback
-
-Cuando no hay sesion grafica valida (sin `DISPLAY`/`WAYLAND_DISPLAY`), el gate clasifica correctamente:
-
-- `INVALID_ENVIRONMENT`
-- `reason: no_graphical_display`
-
-## Builds De Distribucion
-
-```bash
+npm run test:syntax
+npm run test:unit
+npm run test
 npm run release:linux
-npm run release:mac
-npm run release:win
-```
-
-Build para todas las plataformas:
-
-```bash
-npm run release:all
-```
-
-Publicar release automaticamente en GitHub:
-
-```bash
 npm run release:publish
 ```
 
-## Auto-Update
+Nota: para publicar release con electron-builder, define antes:
 
-Melo usa `electron-updater` con GitHub Releases.
+```bash
+export MELO_PUBLISH_OWNER="tu_owner"
+export MELO_PUBLISH_REPO="tu_repo"
+```
 
-- Crea un tag versionado, por ejemplo: `v1.0.0`.
-- Publica la release en GitHub.
-- La app detecta nuevas versiones en instalaciones empaquetadas.
+## Checklist de release
 
-## Observabilidad y Debug
+1. Build Linux actualizado (`npm run release:linux`)
+2. Instalacion limpia de DEB
+3. Validacion single-instance
+4. Validacion MPRIS (play/pause/stop + metadata)
+5. Validacion notificaciones (sin spam)
+6. Validacion autostart y tray
+7. `npm run test` en verde
 
-- Metricas de runtime disponibles via bridge/debug:
-  - fallback triggers (GPU / no-sandbox)
-  - launch success/failure rate
-  - retry metrics
-  - health metrics
-  - latencia de switching y uso de memoria
-- Logs estructurados para analisis en CI/CD y soporte.
+## Debug opcional
 
-## Solucion De Problemas
+Activar logging verbose de Chromium solo cuando sea necesario:
 
-- Linux sandbox/GPU:
-  - Usa el gate y revisa `artifacts/summary.json` para validar el entorno.
-  - Si hay launch-failed, revisar logs de fallback y estado de renderer.
-- Sin audio o DRM:
-  - Verifica que usas la build de Castlabs incluida por el proyecto.
-- Fallo al construir iconos:
-  - Asegura dependencias del sistema para conversion de iconos (ImageMagick/herramientas nativas).
-
-## Disclaimer
-
-Melo no esta afiliado con Apple, Spotify ni ningun servicio de streaming.
-Es un wrapper independiente de codigo abierto para uso personal.
+```bash
+MELO_VERBOSE_LOGGING=1 npm run dev
+```
 
 ## Licencia
 

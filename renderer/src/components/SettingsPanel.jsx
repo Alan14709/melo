@@ -24,6 +24,14 @@ export default function SettingsPanel({ isOpen, onClose }) {
     lastfmApiSecret,
     setLastfmApiSecret,
     setLastfmSessionKey,
+    mediaKeysEnabled,
+    setMediaKeys,
+    immersiveEnabled,
+    setImmersive,
+    overlayControlsEnabled,
+    setOverlayControls,
+    overlayPosition,
+    setOverlayPosition,
     activeServiceId,
     setActiveService,
     setView,
@@ -44,6 +52,32 @@ export default function SettingsPanel({ isOpen, onClose }) {
   const [discordConnected, setDiscordConnected] = useState(false)
   const [lfmStep, setLfmStep] = useState(1)
   const [lfmToken, setLfmToken] = useState(null)
+  const [trayEnabled, setTrayEnabled] = useState(true)
+  const [closeBehavior, setCloseBehavior] = useState('tray')
+  const [autostartEnabled, setAutostartEnabled] = useState(false)
+  const [startMinimized, setStartMinimized] = useState(true)
+
+  useEffect(() => {
+    if (!isOpen) return
+
+    window.melo.getSettings().then((settings) => {
+      const safe = settings || {}
+      const nextTrayEnabled = safe.trayEnabled ?? true
+      const nextCloseBehaviorRaw = safe.closeBehavior ?? 'tray'
+      const nextCloseBehavior = nextCloseBehaviorRaw === 'quit' ? 'quit' : 'tray'
+
+      setTrayEnabled(Boolean(nextTrayEnabled))
+      setCloseBehavior(nextTrayEnabled ? nextCloseBehavior : 'quit')
+      setAutostartEnabled(Boolean(safe.autostartEnabled ?? false))
+      setStartMinimized(Boolean(safe.startMinimized ?? true))
+    }).catch(() => {
+      // Defaults seguros para no romper UI si falla IPC.
+      setTrayEnabled(true)
+      setCloseBehavior('tray')
+      setAutostartEnabled(false)
+      setStartMinimized(true)
+    })
+  }, [isOpen])
 
   useEffect(() => {
     if (!isOpen) return
@@ -84,6 +118,11 @@ export default function SettingsPanel({ isOpen, onClose }) {
     persist('notificationsEnabled', enabled)
   }
 
+  const handleMediaKeysToggle = (enabled) => {
+    setMediaKeys(enabled)
+    persist('mediaKeysEnabled', enabled)
+  }
+
   const handleThemeChange = async (nextTheme) => {
     setTheme(nextTheme)
     applyTheme(nextTheme, nextTheme === 'custom' ? customTheme : null)
@@ -93,6 +132,54 @@ export default function SettingsPanel({ isOpen, onClose }) {
   const handleAutoUpdateToggle = (enabled) => {
     setAutoUpdate(enabled)
     persist('autoUpdateEnabled', enabled)
+  }
+
+  const handleStatsToggle = (enabled) => {
+    setStats(enabled)
+    persist('statsEnabled', enabled)
+  }
+
+  const handleTrayToggle = (enabled) => {
+    setTrayEnabled(enabled)
+    persist('trayEnabled', enabled)
+
+    // Evitar estados invalidos: sin tray, closeBehavior debe ser quit.
+    if (!enabled) {
+      setCloseBehavior('quit')
+      persist('closeBehavior', 'quit')
+    }
+  }
+
+  const handleCloseBehaviorChange = (nextValue) => {
+    const value = nextValue === 'quit' ? 'quit' : 'tray'
+    if (!trayEnabled && value !== 'quit') return
+    setCloseBehavior(value)
+    persist('closeBehavior', value)
+  }
+
+  const handleAutostartToggle = (enabled) => {
+    setAutostartEnabled(enabled)
+    persist('autostartEnabled', enabled)
+  }
+
+  const handleStartMinimizedToggle = (enabled) => {
+    setStartMinimized(enabled)
+    persist('startMinimized', enabled)
+  }
+
+  const handleImmersiveToggle = (enabled) => {
+    setImmersive(enabled)
+    persist('immersiveEnabled', enabled)
+  }
+
+  const handleOverlayControlsToggle = (enabled) => {
+    setOverlayControls(enabled)
+    persist('overlayControlsEnabled', enabled)
+  }
+
+  const handleOverlayPositionChange = (position) => {
+    setOverlayPosition(position)
+    persist('overlayPosition', position)
   }
 
   const handleDiscordToggle = async (enabled) => {
@@ -285,7 +372,55 @@ export default function SettingsPanel({ isOpen, onClose }) {
 
           <section>
             <h3>NOTIFICACIONES <span className="badge-version">v0.3</span></h3>
-            <SettingsRow label="Notificaciones al cambiar cancion" type="toggle" value={notificationsEnabled} onChange={handleNotificationsToggle} />
+            <SettingsRow label="Notificaciones de cancion" type="toggle" value={notificationsEnabled} onChange={handleNotificationsToggle} />
+          </section>
+
+          <section>
+            <h3>SISTEMA</h3>
+            <SettingsRow
+              label="Atajos multimedia (teclas de reproduccion)"
+              type="toggle"
+              value={mediaKeysEnabled}
+              onChange={handleMediaKeysToggle}
+            />
+            <SettingsRow
+              label="Habilitar bandeja (tray)"
+              type="toggle"
+              value={trayEnabled}
+              onChange={handleTrayToggle}
+            />
+
+            <div className={`settings-row ${!trayEnabled ? 'disabled' : ''}`}>
+              <div className="settings-text">
+                <p className="label">Al cerrar la ventana</p>
+                <p className="sublabel">Si eliges 'Ir a bandeja', Melo seguira ejecutandose en segundo plano.</p>
+              </div>
+              <div className="settings-control">
+                <select
+                  className="settings-select"
+                  value={trayEnabled ? closeBehavior : 'quit'}
+                  onChange={(e) => handleCloseBehaviorChange(e.target.value)}
+                  disabled={!trayEnabled}
+                >
+                  <option value="tray">Ir a bandeja</option>
+                  <option value="quit">Salir</option>
+                </select>
+              </div>
+            </div>
+
+            <SettingsRow
+              label="Iniciar con el sistema"
+              type="toggle"
+              value={autostartEnabled}
+              onChange={handleAutostartToggle}
+            />
+            <SettingsRow
+              label="Iniciar minimizado"
+              type="toggle"
+              value={startMinimized}
+              onChange={handleStartMinimizedToggle}
+              disabled={!autostartEnabled}
+            />
           </section>
 
           <section>
@@ -321,6 +456,42 @@ export default function SettingsPanel({ isOpen, onClose }) {
           </section>
 
           <section>
+            <h3>MODO INMERSIVO</h3>
+            <SettingsRow
+              label="Modo inmersivo"
+              sublabel="Oculta la barra lateral para maximizar el contenido"
+              type="toggle"
+              value={immersiveEnabled}
+              onChange={handleImmersiveToggle}
+            />
+            <SettingsRow
+              label="Controles flotantes"
+              sublabel="Muestra la barra de control encima del contenido"
+              type="toggle"
+              value={overlayControlsEnabled}
+              onChange={handleOverlayControlsToggle}
+              disabled={!immersiveEnabled}
+            />
+            <div className={`settings-row ${!immersiveEnabled ? 'disabled' : ''}`}>
+              <div className="settings-text">
+                <p className="label">Posición de controles</p>
+                <p className="sublabel">Ubicación de la barra de control flotante</p>
+              </div>
+              <div className="settings-control">
+                <select
+                  className="settings-select"
+                  value={overlayPosition}
+                  onChange={(e) => handleOverlayPositionChange(e.target.value)}
+                  disabled={!immersiveEnabled}
+                >
+                  <option value="bottom">Abajo</option>
+                  <option value="top">Arriba</option>
+                </select>
+              </div>
+            </div>
+          </section>
+
+          <section>
             <h3>ATAJOS</h3>
             <SettingsRow label="Cmd+K Command Palette" badge="v0.4" type="shortcut" value="Cmd/Ctrl+K" />
             <SettingsRow label="MediaPlayPause" type="shortcut" value="MediaPlayPause" />
@@ -329,7 +500,7 @@ export default function SettingsPanel({ isOpen, onClose }) {
 
           <section>
             <h3>ESTADISTICAS <span className="badge-version">v0.5</span></h3>
-            <SettingsRow label="Guardar historial" type="toggle" value={statsEnabled} onChange={setStats} />
+            <SettingsRow label="Guardar historial" type="toggle" value={statsEnabled} onChange={handleStatsToggle} />
             <SettingsRow label="Exportar datos" type="button" onChange={handleExport} />
             <SettingsRow label="Borrar estadisticas" type="button" buttonText="Borrar" onChange={handleClearStats} />
           </section>

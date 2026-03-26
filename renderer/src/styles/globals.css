@@ -829,6 +829,26 @@ input:focus {
   color: var(--text-secondary);
 }
 
+.settings-select {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-family: var(--font);
+  outline: none;
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.settings-select:focus {
+  border-color: var(--accent);
+}
+
+.settings-select option {
+  color: #111111;
+  background: #ffffff;
+}
+
 .theme-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -2218,4 +2238,53 @@ input:focus {
   font-weight: 600;
   cursor: pointer;
   border: none;
+}
+
+/* ========== MODO INMERSIVO ========== */
+
+/* Cuando el sidebar NO está presente (modo inmersivo) */
+.player-body:has(.browser-area:only-child) {
+  width: 100%;
+}
+
+.player-body:has(.browser-area:only-child) .browser-area {
+  width: 100%;
+  flex-grow: 1;
+}
+
+/* Overlay controls bar - estilos visuales cuando está activo */
+/* Esto es más bien informativo, ya que la posición real se controla desde Electron */
+.overlay-controls-indicator {
+  position: fixed;
+  height: 56px;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--border);
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.overlay-controls-indicator.bottom {
+  bottom: 0;
+  border-bottom: none;
+  border-top: 1px solid var(--border);
+}
+
+.overlay-controls-indicator.top {
+  top: 45px;
+  border-top: none;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Asegurar que browser-area tenga flex layout correcto */
+.browser-area {
+  flex-grow: 1;
+  flex-shrink: 1;
+  min-width: 0;
 }

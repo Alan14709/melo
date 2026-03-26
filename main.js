@@ -10,6 +10,7 @@ const {
   shell,
   Tray,
   Menu,
+  dialog,
   nativeImage,
   net,
 } = require('electron')
@@ -19,12 +20,17 @@ const Store = require('electron-store')
 const discord = require('./integrations/discord')
 const lastfm = require('./integrations/lastfm')
 const { notifyTrackChange } = require('./integrations/notifications')
+const { startMpris, stopMpris } = require('./integrations/mpris')
 const { setupAutoUpdater } = require('./integrations/updater')
 const { adapterManager } = require('./services/adapters/AdapterManager')
 const { BrowserViewAdapter } = require('./services/adapters/BrowserViewAdapter')
 const { playbackState } = require('./services/adapters/PlaybackState')
 const { RetryManager } = require('./services/RetryManager')
 const { HealthMonitor } = require('./services/HealthMonitor')
+const {
+  enableAutostart,
+  disableAutostart,
+} = require('./services/autostart')
 const logger = require('./services/Logger')
 
 // Modo debug de produccion activable por variable de entorno.
@@ -64,6 +70,22 @@ const fallbackStatus = {
   mitigated: false,
   updatedAt: new Date().toISOString(),
 }
+
+const SETTINGS_DEFAULTS = {
+  mediaKeysEnabled: true,
+  notificationsEnabled: true,
+  statsEnabled: true,
+  trayEnabled: true,
+  closeBehavior: 'tray',
+  autostartEnabled: false,
+  startMinimized: true,
+  immersiveEnabled: false,
+  overlayControlsEnabled: true,
+  overlayPosition: 'bottom',
+  hasShownTrayHint: false,
+}
+
+const MEDIA_SHORTCUTS = ['MediaPlayPause', 'MediaNextTrack', 'MediaPreviousTrack']
 
 function updateFallbackStatus(patch = {}) {
   Object.assign(fallbackStatus, patch, { updatedAt: new Date().toISOString() })
@@ -226,8 +248,11 @@ app.commandLine.appendSwitch(
   'unsafely-treat-insecure-origin-as-secure',
   'http://localhost:5173'
 )
-app.commandLine.appendSwitch('enable-logging')
-app.commandLine.appendSwitch('v', '1')
+const verboseLoggingEnabled = DEBUG_MODE || process.env.MELO_VERBOSE_LOGGING === '1'
+if (verboseLoggingEnabled) {
+  app.commandLine.appendSwitch('enable-logging')
+  app.commandLine.appendSwitch('v', '1')
+}
 
 
 const gpuFallbackActive = hasFlag(RENDERER_FALLBACK_FLAGS.gpu)
@@ -301,6 +326,7 @@ let tray = null
 let trayCurrentTrack = null
 let lastTrayTrackId = null
 let isQuitting = false
+let launchStartsMinimized = false
 
 let lastScrobbled = null
 let scrobbleTimeout = null
@@ -311,6 +337,10 @@ let currentVolumeLevel = Math.max(0, Math.min(1, Number(store.get('volumeLevel',
 let _lastMediaTitle = null
 let _lastProgressUpdate = 0
 const PROGRESS_UPDATE_INTERVAL = 2000
+const MEDIA_UPDATE_DEBOUNCE_MS = 350
+let pendingActiveMedia = null
+let pendingMediaTimer = null
+let lastProcessedTrackKey = null
 let processMetricsTimer = null
 let metricsBroadcastTimer = null
 let networkStatusTimer = null
@@ -336,6 +366,26 @@ const viewMetrics = {
 let healthMonitor = null
 const retryManager = new RetryManager(logger)
 const DEBUG_PLAYER = process.env.MELO_DEBUG_PLAYER === '1' || !app.isPackaged
+
+function buildTrackKey(data, serviceId) {
+  return [
+    String(data?.title || '').trim(),
+    String(data?.artist || '').trim(),
+    String(data?.album || '').trim(),
+    String(serviceId || '').trim(),
+  ].join('|')
+}
+
+function scheduleActiveMediaFlush(serviceId, data, flushFn) {
+  pendingActiveMedia = { serviceId, data }
+  clearTimeout(pendingMediaTimer)
+  pendingMediaTimer = setTimeout(() => {
+    const pending = pendingActiveMedia
+    pendingActiveMedia = null
+    if (!pending || typeof flushFn !== 'function') return
+    flushFn(pending.serviceId, pending.data)
+  }, MEDIA_UPDATE_DEBOUNCE_MS)
+}
 
 const PLAYER_STATE = {
   NOT_LOADED: 'NOT_LOADED',
@@ -460,14 +510,19 @@ function executeInWebContents(webContents, script, {
 }
 
 function getContentBounds() {
-  if (!mainWindow) return { x: 220, y: 45, width: 980, height: 633 }
+  if (!mainWindow) return { x: 0, y: 45, width: 1200, height: 633 }
   const b = mainWindow.getContentBounds()
-  return {
-    x: 220,
-    y: 45,
-    width: Math.max(360, b.width - 220),
-    height: Math.max(200, b.height - 45 - 72),
-  }
+  const immersiveEnabled = store.get('immersiveEnabled', SETTINGS_DEFAULTS.immersiveEnabled) === true
+  const SIDEBAR_WIDTH = 220
+  const TOP_HEIGHT = 45
+  const BOTTOM_HEIGHT = 72
+
+  let x = immersiveEnabled ? 0 : SIDEBAR_WIDTH
+  let y = TOP_HEIGHT
+  let width = Math.max(360, b.width - x)
+  let height = Math.max(200, b.height - TOP_HEIGHT - BOTTOM_HEIGHT)
+
+  return { x, y, width, height }
 }
 
 function logProcessMetrics(tag = 'metrics') {
@@ -960,6 +1015,18 @@ async function runSmokeValidation() {
 const isNonEmptyString = (value) => typeof value === 'string' && value.trim().length > 0
 const isFiniteNumber = (value) => Number.isFinite(Number(value))
 
+function getWindowBehaviorSettings() {
+  const trayEnabled = store.get('trayEnabled', SETTINGS_DEFAULTS.trayEnabled) !== false
+  const rawCloseBehavior = store.get('closeBehavior', SETTINGS_DEFAULTS.closeBehavior)
+  const closeBehavior = rawCloseBehavior === 'quit' ? 'quit' : 'tray'
+
+  if (!trayEnabled) {
+    return { trayEnabled: false, closeBehavior: 'quit' }
+  }
+
+  return { trayEnabled, closeBehavior }
+}
+
 function sanitizeErrorPayload(payload) {
   const raw = payload?.error || payload
   return {
@@ -1006,6 +1073,9 @@ async function cleanupAllResources() {
   logger.info('Main', 'cleanup_start')
   clearTimeout(scrobbleTimeout)
   scrobbleTimeout = null
+  clearTimeout(pendingMediaTimer)
+  pendingMediaTimer = null
+  pendingActiveMedia = null
   for (const controller of loadAbortControllers.values()) {
     try { controller.abort() } catch (_) {}
   }
@@ -1018,6 +1088,8 @@ async function cleanupAllResources() {
     healthMonitor.shutdown()
     healthMonitor = null
   }
+
+  stopMpris()
 
   playbackState.destroy()
   await adapterManager.destroyAll().catch(() => {})
@@ -1147,7 +1219,13 @@ function createMainWindow() {
 
   // Mostrar cuando el renderer este listo para evitar blanco/parpadeo en prod.
   mainWindow.once('ready-to-show', () => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show()
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (launchStartsMinimized) {
+      mainWindow.hide()
+      mainWindow.setSkipTaskbar(true)
+      return
+    }
+    mainWindow.show()
   })
 
   mainWindow.setMenuBarVisibility(false)
@@ -1220,8 +1298,15 @@ function createMainWindow() {
     }
   })
 
-  mainWindow.on('close', () => {
-    // Cierre directo: no mantener procesos en background.
+  mainWindow.on('close', (event) => {
+    if (isQuitting) return
+
+    const { trayEnabled, closeBehavior } = getWindowBehaviorSettings()
+    if (trayEnabled && closeBehavior === 'tray') {
+      event.preventDefault()
+      mainWindow.hide()
+      mainWindow.setSkipTaskbar(true)
+    }
   })
 
   mainWindow.on('closed', () => {
@@ -1260,7 +1345,22 @@ function createTray() {
       if (!mainWindow || mainWindow.isDestroyed()) return
       if (mainWindow.isVisible() && mainWindow.isFocused()) {
         mainWindow.hide()
+        mainWindow.setSkipTaskbar(true)
+        
+        // Mostrar hint la primera vez que se minimiza a bandeja (Fase 6 Polish)
+        const hasShownHint = store.get('hasShownTrayHint', false)
+        if (!hasShownHint) {
+          const { Notification } = require('electron')
+          new Notification({
+            title: 'Melo',
+            body: 'Melo sigue ejecutándose en segundo plano. Haz clic en el icono de Melo en la bandeja para volver a abrir.',
+            silent: true,
+            timeoutType: 'default'
+          }).show()
+          store.set('hasShownTrayHint', true)
+        }
       } else {
+        mainWindow.setSkipTaskbar(false)
         mainWindow.show()
         mainWindow.focus()
       }
@@ -1312,6 +1412,7 @@ function renderTrayMenu() {
         label: 'Mostrar Melo',
         click: () => {
           if (!mainWindow || mainWindow.isDestroyed()) return
+          mainWindow.setSkipTaskbar(false)
           mainWindow.show()
           mainWindow.focus()
         },
@@ -1342,6 +1443,21 @@ function updateTrayTrack(data) {
   lastTrayTrackId = trackId
   trayCurrentTrack = data
   renderTrayMenu()
+}
+
+function syncTrayWithSettings() {
+  const trayEnabled = store.get('trayEnabled', SETTINGS_DEFAULTS.trayEnabled) !== false
+  if (!trayEnabled) {
+    if (tray && !tray.isDestroyed()) {
+      tray.destroy()
+    }
+    tray = null
+    return
+  }
+
+  if (!tray || tray.isDestroyed()) {
+    createTray()
+  }
 }
 
 function checkConnection() {
@@ -2032,79 +2148,83 @@ function registerIpcHandlers() {
 
     if (!isActiveService) return
 
-    const now = Date.now()
-    const trackId = `${data.title}-${data.artist}-${serviceId}`
-    const isNewTrack = trackId !== _lastMediaTitle
+    scheduleActiveMediaFlush(serviceId, data, (nextServiceId, nextData) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      const now = Date.now()
+      const trackKey = buildTrackKey(nextData, nextServiceId)
+      const isNewTrack = trackKey !== lastProcessedTrackKey
 
-    // Estado central para evitar desincronizacion entre backend y UI.
-    playbackState.update({
-      trackId,
-      title: data.title,
-      artist: data.artist,
-      album: data.album,
-      artwork: data.artwork,
-      isPlaying: data.isPlaying ?? data.state === 'playing',
-      service: serviceId,
-    })
-
-    store.set('currentTrackId', trackId)
-
-    const shouldUpdate = isNewTrack
-      || now - _lastProgressUpdate > PROGRESS_UPDATE_INTERVAL
-
-    if (shouldUpdate) {
-      _lastProgressUpdate = now
-      mainWindow.webContents.send('media:update', {
-        serviceId,
-        ...data,
-        isPlaying: playbackState.state.isPlaying,
+      // Estado central para evitar desincronizacion entre backend y UI.
+      playbackState.update({
+        trackId: trackKey,
+        title: nextData.title,
+        artist: nextData.artist,
+        album: nextData.album,
+        artwork: nextData.artwork,
+        isPlaying: nextData.isPlaying ?? nextData.state === 'playing',
+        service: nextServiceId,
       })
 
-      if (miniWindow && !miniWindow.isDestroyed()) {
-        miniWindow.webContents.send('media:update', {
-          serviceId,
-          ...data,
+      store.set('currentTrackId', trackKey)
+
+      const shouldUpdate = isNewTrack
+        || now - _lastProgressUpdate > PROGRESS_UPDATE_INTERVAL
+
+      if (shouldUpdate) {
+        _lastProgressUpdate = now
+        mainWindow.webContents.send('media:update', {
+          serviceId: nextServiceId,
+          ...nextData,
           isPlaying: playbackState.state.isPlaying,
         })
-      }
-    }
 
-    if (isNewTrack) {
-      _lastMediaTitle = trackId
+        if (miniWindow && !miniWindow.isDestroyed()) {
+          miniWindow.webContents.send('media:update', {
+            serviceId: nextServiceId,
+            ...nextData,
+            isPlaying: playbackState.state.isPlaying,
+          })
+        }
+      }
+
+      if (!isNewTrack) return
+
+      lastProcessedTrackKey = trackKey
+      _lastMediaTitle = trackKey
       logger.info('Playback', 'track_changed', {
-        title: data.title,
-        artist: data.artist || null,
-        serviceId,
+        title: nextData.title,
+        artist: nextData.artist || null,
+        serviceId: nextServiceId,
       })
 
-      updateTrayTrack({ title: data.title, artist: data.artist })
-      trackPlay(data, serviceId)
+      updateTrayTrack({ title: nextData.title, artist: nextData.artist })
+      trackPlay(nextData, nextServiceId)
 
-      if (store.get('notificationsEnabled', true) && data.title) {
-        notifyTrackChange(data).catch(() => {})
+      if (store.get('notificationsEnabled', SETTINGS_DEFAULTS.notificationsEnabled) && nextData.title) {
+        notifyTrackChange(nextData).catch(() => {})
       }
 
-      if (store.get('discordEnabled', false) && data.title) {
-        const service = Object.values(SERVICES).find((s) => s.id === serviceId)
+      if (store.get('discordEnabled', false) && nextData.title) {
+        const service = Object.values(SERVICES).find((s) => s.id === nextServiceId)
         discord.updatePresence({
-          title: data.title,
-          artist: data.artist,
+          title: nextData.title,
+          artist: nextData.artist,
           serviceName: service?.name,
         }).catch(() => {})
       }
 
-      if (store.get('lastfmEnabled', false) && data.title) {
-        const tId = `${data.title}-${data.artist || ''}`
-        lastfm.updateNowPlaying(data).catch(() => {})
+      if (store.get('lastfmEnabled', false) && nextData.title) {
+        const tId = `${nextData.title}-${nextData.artist || ''}`
+        lastfm.updateNowPlaying(nextData).catch(() => {})
         if (tId !== lastScrobbled) {
           clearTimeout(scrobbleTimeout)
           scrobbleTimeout = setTimeout(() => {
-            lastfm.scrobble(data).catch(() => {})
+            lastfm.scrobble(nextData).catch(() => {})
             lastScrobbled = tId
           }, 30000)
         }
       }
-    }
+    })
   })
 
   ipcMain.on('health:mediaSession', (_event, payload) => {
@@ -2220,26 +2340,140 @@ function registerIpcHandlers() {
   })
 
   ipcMain.handle('settings:get', () => ({
+    mediaKeysEnabled: store.get('mediaKeysEnabled', SETTINGS_DEFAULTS.mediaKeysEnabled),
     discordEnabled: store.get('discordEnabled', false),
     discordClientId: store.get('discordClientId', ''),
     lastfmEnabled: store.get('lastfmEnabled', false),
     lastfm: store.get('lastfm', {}),
-    notificationsEnabled: store.get('notificationsEnabled', true),
+    statsEnabled: store.get('statsEnabled', SETTINGS_DEFAULTS.statsEnabled),
+    notificationsEnabled: store.get('notificationsEnabled', SETTINGS_DEFAULTS.notificationsEnabled),
     theme: store.get('theme', 'dark'),
     accentColor: store.get('accentColor', '#fc3c44'),
     volumeLevel: store.get('volumeLevel', 1),
     autoUpdateEnabled: store.get('autoUpdateEnabled', true),
     dynamicTheme: store.get('dynamicTheme', false),
     customTheme: store.get('customTheme', null),
+    trayEnabled: store.get('trayEnabled', SETTINGS_DEFAULTS.trayEnabled),
+    closeBehavior: getWindowBehaviorSettings().closeBehavior,
+    autostartEnabled: store.get('autostartEnabled', SETTINGS_DEFAULTS.autostartEnabled),
+    startMinimized: store.get('startMinimized', SETTINGS_DEFAULTS.startMinimized),
+    immersiveEnabled: store.get('immersiveEnabled', SETTINGS_DEFAULTS.immersiveEnabled),
+    overlayControlsEnabled: store.get('overlayControlsEnabled', SETTINGS_DEFAULTS.overlayControlsEnabled),
+    overlayPosition: store.get('overlayPosition', SETTINGS_DEFAULTS.overlayPosition),
   }))
 
   ipcMain.handle('settings:save', (_e, payload = {}) => {
-    if (!isNonEmptyString(payload.key)) return false
-    const { key, value } = payload
-    store.set(key, value)
-    if (key === 'autoUpdateEnabled' && value === true) {
+    let updates = null
+
+    if (isNonEmptyString(payload.key)) {
+      updates = { [payload.key]: payload.value }
+    } else if (payload && typeof payload === 'object') {
+      updates = { ...payload }
+    }
+
+    if (!updates || Object.keys(updates).length === 0) return false
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'trayEnabled')) {
+      updates.trayEnabled = updates.trayEnabled !== false
+      store.set('trayEnabled', updates.trayEnabled)
+      if (updates.trayEnabled === false) {
+        updates.closeBehavior = 'quit'
+      }
+      syncTrayWithSettings()
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'mediaKeysEnabled')) {
+      updates.mediaKeysEnabled = updates.mediaKeysEnabled !== false
+      store.set('mediaKeysEnabled', updates.mediaKeysEnabled)
+      try {
+        syncMediaShortcutsWithSettings()
+      } catch (error) {
+        logger.warn('Shortcuts', '[settings] sync_media_shortcuts_failed', {
+          message: error?.message || 'unknown_error',
+        })
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'notificationsEnabled')) {
+      updates.notificationsEnabled = updates.notificationsEnabled !== false
+      store.set('notificationsEnabled', updates.notificationsEnabled)
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'closeBehavior')) {
+      updates.closeBehavior = updates.closeBehavior === 'quit' ? 'quit' : 'tray'
+      const trayEnabled = Object.prototype.hasOwnProperty.call(updates, 'trayEnabled')
+        ? updates.trayEnabled
+        : store.get('trayEnabled', SETTINGS_DEFAULTS.trayEnabled) !== false
+      if (!trayEnabled) updates.closeBehavior = 'quit'
+      store.set('closeBehavior', updates.closeBehavior)
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'autostartEnabled')) {
+      updates.autostartEnabled = updates.autostartEnabled === true
+      store.set('autostartEnabled', updates.autostartEnabled)
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'startMinimized')) {
+      updates.startMinimized = updates.startMinimized !== false
+      store.set('startMinimized', updates.startMinimized)
+    }
+
+    Object.entries(updates).forEach(([key, value]) => {
+      if (['trayEnabled', 'closeBehavior', 'autostartEnabled', 'startMinimized', 'mediaKeysEnabled', 'notificationsEnabled', 'immersiveEnabled', 'overlayControlsEnabled', 'overlayPosition'].includes(key)) return
+      store.set(key, value)
+    })
+
+    if (updates.autoUpdateEnabled === true) {
       setupAutoUpdater(mainWindow)
     }
+
+    const autostartRelatedChange =
+      Object.prototype.hasOwnProperty.call(updates, 'autostartEnabled')
+      || Object.prototype.hasOwnProperty.call(updates, 'startMinimized')
+    if (autostartRelatedChange) {
+      try {
+        const autostartEnabled = store.get('autostartEnabled', SETTINGS_DEFAULTS.autostartEnabled) === true
+        const startMinimized = store.get('startMinimized', SETTINGS_DEFAULTS.startMinimized) !== false
+        if (autostartEnabled) {
+          enableAutostart({ execPath: process.execPath, startMinimized })
+        } else {
+          disableAutostart()
+        }
+      } catch (error) {
+        logger.error('Autostart', 'apply_failed', {
+          message: error?.message || 'unknown_error',
+        })
+      }
+    }
+
+    const immersiveRelatedChange =
+      Object.prototype.hasOwnProperty.call(updates, 'immersiveEnabled')
+      || Object.prototype.hasOwnProperty.call(updates, 'overlayControlsEnabled')
+      || Object.prototype.hasOwnProperty.call(updates, 'overlayPosition')
+    if (immersiveRelatedChange) {
+      try {
+        if (Object.prototype.hasOwnProperty.call(updates, 'immersiveEnabled')) {
+          updates.immersiveEnabled = updates.immersiveEnabled === true
+          store.set('immersiveEnabled', updates.immersiveEnabled)
+        }
+        if (Object.prototype.hasOwnProperty.call(updates, 'overlayControlsEnabled')) {
+          updates.overlayControlsEnabled = updates.overlayControlsEnabled !== false
+          store.set('overlayControlsEnabled', updates.overlayControlsEnabled)
+        }
+        if (Object.prototype.hasOwnProperty.call(updates, 'overlayPosition')) {
+          const pos = updates.overlayPosition
+          if (pos === 'top' || pos === 'bottom') {
+            store.set('overlayPosition', pos)
+          }
+        }
+        setTimeout(() => applyViewBounds(), 50)
+      } catch (error) {
+        logger.warn('Immersive', 'apply_failed', {
+          message: error?.message || 'unknown_error',
+        })
+      }
+    }
+
     return true
   })
 
@@ -2267,14 +2501,60 @@ function registerIpcHandlers() {
 }
 
 function registerGlobalShortcuts() {
-  globalShortcut.register('MediaPlayPause', () =>
-    runPlayerAction('play').catch(() => {}))
-  globalShortcut.register('MediaNextTrack', () =>
-    runPlayerAction('next').catch(() => {}))
-  globalShortcut.register('MediaPreviousTrack', () =>
-    runPlayerAction('previous').catch(() => {}))
-  globalShortcut.register('CommandOrControl+Shift+M', () =>
-    toggleMiniPlayer())
+  syncMediaShortcutsWithSettings()
+  try {
+    if (!globalShortcut.isRegistered('CommandOrControl+Shift+M')) {
+      globalShortcut.register('CommandOrControl+Shift+M', () =>
+        toggleMiniPlayer())
+    }
+  } catch (error) {
+    logger.warn('Shortcuts', '[settings] register_shortcut_failed', {
+      accelerator: 'CommandOrControl+Shift+M',
+      message: error?.message || 'unknown_error',
+    })
+  }
+}
+
+function unregisterMediaShortcuts() {
+  MEDIA_SHORTCUTS.forEach((accelerator) => {
+    try {
+      globalShortcut.unregister(accelerator)
+    } catch (error) {
+      logger.warn('Shortcuts', '[settings] unregister_shortcut_failed', {
+        accelerator,
+        message: error?.message || 'unknown_error',
+      })
+    }
+  })
+}
+
+function registerMediaShortcuts() {
+  const handlers = {
+    MediaPlayPause: () => runPlayerAction('play').catch(() => {}),
+    MediaNextTrack: () => runPlayerAction('next').catch(() => {}),
+    MediaPreviousTrack: () => runPlayerAction('previous').catch(() => {}),
+  }
+
+  MEDIA_SHORTCUTS.forEach((accelerator) => {
+    try {
+      if (globalShortcut.isRegistered(accelerator)) return
+      globalShortcut.register(accelerator, handlers[accelerator])
+    } catch (error) {
+      logger.warn('Shortcuts', '[settings] register_media_shortcut_failed', {
+        accelerator,
+        message: error?.message || 'unknown_error',
+      })
+    }
+  })
+}
+
+function syncMediaShortcutsWithSettings() {
+  const mediaKeysEnabled = store.get('mediaKeysEnabled', SETTINGS_DEFAULTS.mediaKeysEnabled) !== false
+  if (mediaKeysEnabled) {
+    registerMediaShortcuts()
+  } else {
+    unregisterMediaShortcuts()
+  }
 }
 
 app.whenReady().then(async () => {
@@ -2309,10 +2589,28 @@ app.whenReady().then(async () => {
     return
   }
 
+  if (process.platform !== 'linux') {
+    dialog.showErrorBox('Melo', 'This build is currently supported only on Linux.')
+    app.quit()
+    return
+  }
+
+  const isAutostartLaunch = process.argv.includes('--autostart')
+  const startMinimized = store.get('startMinimized', SETTINGS_DEFAULTS.startMinimized) !== false
+  launchStartsMinimized = isAutostartLaunch && startMinimized
+
   logger.info('Environment', 'runtime_diagnostics', getRuntimeDiagnostics())
   try {
     logger.info('Environment', 'gpu_status', app.getGPUFeatureStatus())
   } catch (_) {}
+
+  // Inicializar caché de artworks para MPRIS y notificaciones
+  const ArtworkCache = require('./services/ArtworkCache')
+  try {
+    await ArtworkCache.init()
+  } catch (_) {
+    logger.warn('Main', 'artwork_cache_init_failed')
+  }
 
   try {
     if (components?.whenReady) {
@@ -2354,9 +2652,57 @@ app.whenReady().then(async () => {
     message: fallbackStatus.message,
     mitigated: fallbackStatus.mitigated,
   })
-  createTray()
+  syncTrayWithSettings()
   registerIpcHandlers()
   registerGlobalShortcuts()
+
+  if (process.platform === 'linux') {
+    startMpris({
+      getState: () => playbackState.getCurrent(),
+      onStateChange: (cb) => {
+        if (typeof cb !== 'function') return () => {}
+        playbackState.onUpdate(cb)
+        return () => playbackState.onUpdate(() => {})
+      },
+      onPlayerAction: (action) => {
+        try {
+          if (action === 'raise') {
+            if (!mainWindow || mainWindow.isDestroyed()) return
+            mainWindow.setSkipTaskbar(false)
+            if (!mainWindow.isVisible()) mainWindow.show()
+            if (mainWindow.isMinimized()) mainWindow.restore()
+            mainWindow.focus()
+            return
+          }
+
+          if (action === 'quit') {
+            isQuitting = true
+            app.quit()
+            return
+          }
+
+          const actionMap = {
+            play: 'play',
+            pause: 'play',
+            playpause: 'play',
+            next: 'next',
+            previous: 'previous',
+          }
+
+          const mappedAction = actionMap[action]
+          if (!mappedAction) return
+          runPlayerAction(mappedAction).catch(() => {})
+        } catch (error) {
+          logger.warn('MPRIS', '[mpris] action_failed', {
+            action,
+            message: error?.message || 'unknown_error',
+          })
+        }
+      },
+      logger,
+    }).catch(() => {})
+  }
+
   startMetricsReporter(5000)
 
   healthMonitor = new HealthMonitor(playbackState, logger)
@@ -2422,7 +2768,11 @@ app.whenReady().then(async () => {
 })
 
 app.on('second-instance', () => {
-  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (app.isReady()) createMainWindow()
+    return
+  }
+  mainWindow.setSkipTaskbar(false)
   if (!mainWindow.isVisible()) mainWindow.show()
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.focus()
