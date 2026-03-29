@@ -115,6 +115,33 @@ jobs:
           npx vite build
           npx electron-builder --linux --publish always
 
+      - name: Undraft release and enforce public visibility
+        if: steps.castlabs_install.outputs.install_mode == 'castlabs'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          API_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          RELEASE_ID="$(curl -sS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "${API_URL}/releases/tags/${GITHUB_REF_NAME}" | jq -r '.id // empty')"
+          if [[ -z "${RELEASE_ID}" ]]; then
+            echo "::error::Release for ${GITHUB_REF_NAME} was not created by electron-builder"
+            exit 1
+          fi
+          curl -sS -X PATCH -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "${API_URL}/releases/${RELEASE_ID}" -d '{"draft":false,"prerelease":false}' >/dev/null
+
+      - name: Verify public release assets
+        if: steps.castlabs_install.outputs.install_mode == 'castlabs'
+        shell: bash
+        run: |
+          set -euo pipefail
+          API_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          PUBLIC_RELEASE_JSON="$(curl -fsS -H "Accept: application/vnd.github+json" "${API_URL}/releases/tags/${GITHUB_REF_NAME}")"
+          echo "${PUBLIC_RELEASE_JSON}" | jq -e '.draft == false' >/dev/null
+          echo "${PUBLIC_RELEASE_JSON}" | jq -e '[.assets[].name] | any(. == "latest-linux.yml")' >/dev/null
+          echo "${PUBLIC_RELEASE_JSON}" | jq -e '[.assets[].name] | any(test("\\.AppImage$"))' >/dev/null
+          echo "${PUBLIC_RELEASE_JSON}" | jq -e '[.assets[].name] | any(test("\\.deb$"))' >/dev/null
+
       - name: List dist files
         if: steps.castlabs_install.outputs.install_mode == 'castlabs'
         shell: bash
