@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # CONFIG
-TARGET_VERSION="1.6.1"
+TARGET_VERSION="1.6.2"
 RELEASE_TAG="v${TARGET_VERSION}"
 GIT_BRANCH="main"
 RELEASE_MESSAGE="release: v${TARGET_VERSION} - Major stability, DRM fixes, session persistence, UI improvements"
