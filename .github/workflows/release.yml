@@ -78,6 +78,22 @@ jobs:
           echo "::error::Production release blocked because DEBUG_BUILD=true"
           exit 1
 
+      - name: Delete existing release for current tag
+        if: steps.castlabs_install.outputs.install_mode == 'castlabs'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          API_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          RELEASE_ID="$(curl -sS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "${API_URL}/releases/tags/${GITHUB_REF_NAME}" | jq -r '.id // empty')"
+          if [[ -n "${RELEASE_ID}" ]]; then
+            echo "Deleting existing release id ${RELEASE_ID} for ${GITHUB_REF_NAME}"
+            curl -sS -X DELETE -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "${API_URL}/releases/${RELEASE_ID}" >/dev/null
+          else
+            echo "No existing release found for ${GITHUB_REF_NAME}"
+          fi
+
       - name: Build and Publish
         if: steps.castlabs_install.outputs.install_mode == 'castlabs'
         env:

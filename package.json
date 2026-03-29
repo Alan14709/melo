@@ -73,7 +73,8 @@
       {
         "provider": "github",
         "owner": "Alan14709",
-        "repo": "melo"
+        "repo": "melo",
+        "releaseType": "release"
       }
     ],
     "linux": {
