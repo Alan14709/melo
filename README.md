@@ -1,6 +1,6 @@
 # Melo
 
-![Version](https://img.shields.io/badge/version-v1.5.3-success)
+![Version](https://img.shields.io/badge/version-v1.5.4-success)
 ![Downloads](https://img.shields.io/badge/downloads-see%20releases-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux-blue)
 ![DRM](https://img.shields.io/badge/DRM-Widevine%20%2B%20HEVC-green)
@@ -24,7 +24,7 @@ El proyecto esta orientado a experiencia de escritorio real y estabilidad operat
 
 ## Estado del proyecto
 
-- Version actual de release: **v1.5.3**
+- Version actual de release: **v1.5.4**
 - Plataforma soportada: Linux
 - Build targets: AppImage y DEB
 - Estado: publicado en produccion
@@ -32,7 +32,7 @@ El proyecto esta orientado a experiencia de escritorio real y estabilidad operat
 - Session Persistence: ✅ Cookies/localStorage/IndexedDB guardadas
 - Release Automation: ✅ Fully automated CI/CD
 
-## Novedades v1.5.3
+## Novedades v1.5.4
 
 ### 🎵 Apple Music & YouTube - DRM Fixes
 
@@ -189,7 +189,7 @@ npm install
 npm run dev
 ```
 
-## Release Automation (v1.5.3+)
+## Release Automation (v1.5.4+)
 
 ### Quick Start
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ################################################################################
-# Melo Release Script - v1.5.3
+# Melo Release Script - v1.5.4
 # DevOps-grade automation for clean, safe, production-ready releases
 # Date: 2026-03-29
 #
@@ -25,10 +25,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${SCRIPT_DIR}"
-TARGET_VERSION="1.5.3"
+TARGET_VERSION="1.5.4"
 RELEASE_TAG="v${TARGET_VERSION}"
 GIT_BRANCH="main"
-RELEASE_MESSAGE="release: v${TARGET_VERSION} - DRM fixes + session persistence + stability"
+RELEASE_MESSAGE="release: v${TARGET_VERSION} - Production-ready release with DRM, session persistence, and stability improvements"
 
 # Color codes for output
 RED='\033[0;31m'
