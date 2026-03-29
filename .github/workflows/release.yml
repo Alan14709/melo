@@ -81,7 +81,7 @@ jobs:
       - name: Build and release
         if: steps.castlabs_install.outputs.install_mode == 'castlabs'
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
           ELECTRON_MIRROR: https://github.com/castlabs/electron-releases/releases/download/
           ELECTRON_CUSTOM_VERSION: ${{ steps.castlabs_install.outputs.selected_castlabs_version }}

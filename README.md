@@ -198,7 +198,7 @@ git push origin v1.6.3
 ## Notas de operacion
 
 - Si `DEBUG_BUILD=true`, el release se bloquea por seguridad.
-- Sin `GH_TOKEN` valido, `release:publish` no puede publicar en GitHub.
+- El workflow usa `GH_TOKEN` y, si no existe, hace fallback a `github.token` para publicar.
 - Para diagnostico de fallos de release, revisar artifacts del workflow `Release Debug Melo`.
 
 ## Licencia
