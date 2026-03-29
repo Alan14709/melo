@@ -18,9 +18,9 @@
     "test:stress": "node scripts/stress-test.js",
     "test:smoke": "node scripts/e2e-smoke.js",
     "postinstall": "electron-builder install-app-deps",
-    "release:linux": "vite build && electron-builder --linux",
+    "release:linux": "vite build && npx electron-builder --linux",
     "prerelease:publish": "node -e \"require('fs').mkdirSync('dist/renderer', {recursive:true})\"",
-    "release:publish": "vite build && electron-builder --publish always"
+    "release:publish": "vite build && npx electron-builder --linux --publish always"
   },
   "dependencies": {
     "dbus-next": "^0.10.2",
@@ -67,19 +67,21 @@
       }
     ],
     "directories": {
-      "output": "dist-electron"
+      "output": "dist"
     },
-    "publish": {
-      "provider": "github",
-      "owner": "Alan14709",
-      "repo": "melo",
-      "releaseType": "release"
-    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Alan14709",
+        "repo": "melo"
+      }
+    ],
     "linux": {
       "target": [
         "AppImage",
         "deb"
       ],
+      "artifactName": "${productName}-${version}.${ext}",
       "category": "Audio",
       "icon": "assets/icon.png",
       "maintainer": "Melo Maintainers"

@@ -78,9 +78,10 @@ jobs:
           echo "::error::Production release blocked because DEBUG_BUILD=true"
           exit 1
 
-      - name: Build artifacts
+      - name: Build and Publish
         if: steps.castlabs_install.outputs.install_mode == 'castlabs'
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
           ELECTRON_MIRROR: https://github.com/castlabs/electron-releases/releases/download/
           ELECTRON_CUSTOM_VERSION: ${{ steps.castlabs_install.outputs.selected_castlabs_version }}
@@ -96,17 +97,18 @@ jobs:
           echo "Building Melo ${APP_VERSION} with castLabs Electron ${ELECTRON_CUSTOM_VERSION} (custom dir ${ELECTRON_CUSTOM_DIR})"
           npm run prebuild
           npx vite build
-          npx electron-builder --config.electronVersion="${ELECTRON_CUSTOM_VERSION}" --publish never
+          npx electron-builder --linux --publish always
 
-      - name: Publish GitHub release
+      - name: List dist files
         if: steps.castlabs_install.outputs.install_mode == 'castlabs'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ env.APP_VERSION }}
-          name: Melo v${{ env.APP_VERSION }}
-          files: |
-            dist-electron/*.AppImage
-            dist-electron/*.deb
-          fail_on_unmatched_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+        shell: bash
+        run: ls -la dist/
+
+      - name: Verify update metadata and artifacts
+        if: steps.castlabs_install.outputs.install_mode == 'castlabs'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f dist/latest-linux.yml
+          ls dist/*.AppImage >/dev/null 2>&1
+          ls dist/*.deb >/dev/null 2>&1

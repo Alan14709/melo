@@ -104,6 +104,7 @@ try_castlabs_version() {
 
     clean_attempt_state
     npm pkg set "devDependencies.electron=${base_version}" >/dev/null
+    npm pkg set "build.electronVersion=${castlabs_version}" >/dev/null
     set_castlabs_env "$castlabs_version" "$base_version"
 
     install_log="/tmp/melo-castlabs-install-${base_version//./-}-${retry}.log"
@@ -168,6 +169,7 @@ debug_fallback_install() {
 
   base_version="${CASTLABS_CANDIDATES[0]%%+*}"
   npm pkg set "devDependencies.electron=${base_version}" >/dev/null
+  npm pkg delete build.electronVersion >/dev/null || true
 
   if npm install; then
     set_output "install_mode" "debug"
