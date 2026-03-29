@@ -12,10 +12,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
-      ELECTRON_MIRROR: https://github.com/castlabs/electron-releases/releases/download/
-      ELECTRON_CUSTOM_DIR: v30.3.1+wvcus
-      npm_config_electron_mirror: https://github.com/castlabs/electron-releases/releases/download/
-      npm_config_electron_custom_dir: v30.3.1+wvcus
+      APP_VERSION: 1.6.3
 
     steps:
       - uses: actions/checkout@v4
@@ -26,40 +23,78 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Validate release tag for 1.6.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_NAME}" != "v${APP_VERSION}" ]]; then
+            echo "::error::This workflow publishes only v${APP_VERSION}. Current tag: ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
       - name: Cache Electron binaries
         uses: actions/cache@v4
         with:
           path: ~/.cache/electron
-          key: ${{ runner.os }}-electron-30.3.1+wvcus
+          key: ${{ runner.os }}-electron-castlabs-${{ env.APP_VERSION }}-${{ github.run_attempt }}
           restore-keys: |
-            ${{ runner.os }}-electron-
+            ${{ runner.os }}-electron-castlabs-${{ env.APP_VERSION }}-
+            ${{ runner.os }}-electron-castlabs-
 
-      - name: Install dependencies
+      - name: Set app version to 1.6.3
         shell: bash
         run: |
           set -euo pipefail
-          echo "Installing with castLabs mirror (v30.3.1+wvcus)..."
-          export ELECTRON_MIRROR=https://github.com/castlabs/electron-releases/releases/download/
-          export ELECTRON_CUSTOM_DIR=v30.3.1+wvcus
-          npm install --verbose || {
-            echo "castLabs install failed, retrying with official Electron"
-            rm -rf node_modules package-lock.json
-            npm install
-          }
+          npm version "$APP_VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Install dependencies with castLabs fallback
+        id: castlabs_install
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/install-castlabs-electron.sh
+
+      - name: Print selected Electron mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "DEBUG_BUILD=${DEBUG_BUILD:-unset}"
+          echo "ELECTRON_WVCUS_VERSION=${ELECTRON_WVCUS_VERSION:-unset}"
+          echo "ELECTRON_CUSTOM_DIR=${ELECTRON_CUSTOM_DIR:-unset}"
+          echo "install_mode=${{ steps.castlabs_install.outputs.install_mode }}"
+          echo "selected_castlabs_version=${{ steps.castlabs_install.outputs.selected_castlabs_version }}"
+          echo "selected_electron_version=${{ steps.castlabs_install.outputs.selected_electron_version }}"
+          echo "selected_custom_dir=${{ steps.castlabs_install.outputs.selected_custom_dir }}"
 
       - name: Syntax check
         run: npm run test:syntax
 
+      - name: Stop production publish on debug fallback
+        if: steps.castlabs_install.outputs.install_mode == 'debug'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::warning::castLabs versions failed. Official Electron fallback installed for debug only."
+          echo "::error::Production release blocked because DEBUG_BUILD=true"
+          exit 1
+
       - name: Build and release
+        if: steps.castlabs_install.outputs.install_mode == 'castlabs'
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
           ELECTRON_MIRROR: https://github.com/castlabs/electron-releases/releases/download/
-          ELECTRON_CUSTOM_DIR: v30.3.1+wvcus
+          ELECTRON_CUSTOM_VERSION: ${{ steps.castlabs_install.outputs.selected_castlabs_version }}
+          ELECTRON_CUSTOM_DIR: ${{ steps.castlabs_install.outputs.selected_custom_dir }}
+          npm_config_electron_mirror: https://github.com/castlabs/electron-releases/releases/download/
+          npm_config_electron_custom_version: ${{ steps.castlabs_install.outputs.selected_castlabs_version }}
+          npm_config_electron_custom_dir: ${{ steps.castlabs_install.outputs.selected_custom_dir }}
         shell: bash
         run: |
           set -euo pipefail
-          echo "Building with castLabs Electron (v30.3.1+wvcus with Widevine)..."
-          export ELECTRON_MIRROR=https://github.com/castlabs/electron-releases/releases/download/
-          export ELECTRON_CUSTOM_DIR=v30.3.1+wvcus
+          if [[ -z "${ELECTRON_CUSTOM_VERSION}" ]] || [[ -z "${ELECTRON_CUSTOM_DIR}" ]]; then
+            echo "::error::Missing castLabs runtime metadata (ELECTRON_CUSTOM_VERSION/ELECTRON_CUSTOM_DIR)"
+            exit 1
+          fi
+          echo "Building Melo ${APP_VERSION} with castLabs Electron ${ELECTRON_CUSTOM_VERSION} (custom dir ${ELECTRON_CUSTOM_DIR})"
           npm run release:publish

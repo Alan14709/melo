@@ -1,146 +1,128 @@
 # Melo
 
-![Version](https://img.shields.io/badge/version-v1.5.4-success)
-![Downloads](https://img.shields.io/badge/downloads-see%20releases-blue)
+![Version](https://img.shields.io/badge/version-v1.6.3-success)
 ![Platform](https://img.shields.io/badge/platform-Linux-blue)
-![DRM](https://img.shields.io/badge/DRM-Widevine%20%2B%20HEVC-green)
+![Node](https://img.shields.io/badge/node-20_LTS-339933)
+![DRM](https://img.shields.io/badge/DRM-Widevine%20WVCUS-green)
 ![Stack](https://img.shields.io/badge/stack-Electron%20%2B%20React%20%2B%20Vite-black)
 
-Cliente de escritorio Linux para streaming musical en una sola app.
-Incluye integracion con **Apple Music, Spotify, YouTube Music, Tidal y Deezer** con DRM completo.
+Melo es una app de escritorio Linux para musica en streaming sobre Electron, con integraciones de sistema, persistencia de sesion por servicio y soporte DRM con Widevine.
 
-## Que es Melo
+## Version actual
 
-Melo es un contenedor de servicios de streaming basado en Electron con enfoque Linux-first.
-El proyecto esta orientado a experiencia de escritorio real y estabilidad operativa:
+- Release estable: **v1.6.3**
+- Targets Linux: **AppImage** y **DEB**
+- CI/CD: GitHub Actions con publicacion automatica por tag
 
-- control por bandeja (tray)
-- autostart via .desktop
-- media keys globales
-- notificaciones nativas
-- integracion MPRIS (GNOME/KDE)
-- **DRM Widevine con codecs HEVC/VP9**
-- **Sesión persistente por servicio**
+## Novedades v1.6.3
 
-## Estado del proyecto
+- Pipeline de release reforzado para castLabs (WVCUS) con fallback por versiones.
+- Instalacion robusta de Electron con limpieza total por intento.
+- Validacion obligatoria de Widevine antes de permitir build de produccion.
+- Bloqueo de publicacion si se activa fallback de debug.
+- Workflow opcional de debug para recolectar logs cuando falla release.
 
-- Version actual de release: **v1.5.4**
-- Plataforma soportada: Linux
-- Build targets: AppImage y DEB
-- Estado: publicado en produccion
-- DRM: ✅ Apple Music + YouTube funcional
-- Session Persistence: ✅ Cookies/localStorage/IndexedDB guardadas
-- Release Automation: ✅ Fully automated CI/CD
+## Servicios soportados
 
-## Novedades v1.5.4
+- Apple Music
+- Spotify
+- YouTube Music
+- Tidal
+- Deezer
 
-### 🎵 Apple Music & YouTube - DRM Fixes
+## Especificaciones funcionales
 
-- ✅ **Apple Music sin "Update Browser"**: Chrome UA moderno (no Safari, no Electron detection)
-- ✅ **Lyrics funcionales**: Sesión independiente limpia por servicio
-- ✅ **YouTube sin congelamiento a 59s**: UA estable + partición dedicada
-- ✅ **Codecs HEVC/VP9 habilitados**: PlatformHEVCDecoderSupport activado
-- ✅ **DRM Widevine mejorado**: Enable-widevine-cdm + plugins integrados
-- Ver detalles: [APPLE_MUSIC_DRM_FIX.md](./APPLE_MUSIC_DRM_FIX.md)
+### Reproduccion e interfaz
 
-### 💾 Persistencia de Sesión
+- Shell de reproductor multi-servicio con cambio rapido de proveedor.
+- Ultimo servicio persistido entre reinicios.
+- Control desde bandeja de sistema (tray).
+- Modo inmersivo para UI.
+- Volumen persistente.
 
-- ✅ **userData path explícito**: `~/.config/Melo/`
-- ✅ **Particiones persistentes por servicio**: apple-music, youtube, spotify, tidal, deezer
-- ✅ **Cookies guardadas en disco**: No se pierden al reiniciar
-- ✅ **localStorage/IndexedDB persistente**: Datos de usuario preservados
-- ✅ **Login no se pierde**: Entre reinicios de app mantiene sesión
-- ✅ **Permisos centralizados**: Media, fullscreen, clipboard configurados por servicio
+### Integraciones del sistema
 
-### 🚀 Release Automation
+- Media keys globales.
+- Notificaciones nativas.
+- MPRIS para GNOME/KDE.
+- Auto inicio Linux via .desktop.
+- Discord Rich Presence.
+- Last.fm scrobbling.
 
-- ✅ **Script `release.sh` totalmente automatizado**: 12 pasos integrados
-- ✅ **Pre-flight validation**: 6 checks antes de iniciar
-- ✅ **Clean build from scratch**: node_modules + dist + caches
-- ✅ **Verified artifacts**: Verifica AppImage + .deb existen
-- ✅ **Git operations**: Commit + tag + push automatizado
-- ✅ **GitHub release**: Crea release automáticamente (si `gh` CLI disponible)
-- ✅ **Fail-fast safety**: 17 validaciones, se detiene en primer error
-- Ver detalles: [RELEASE_GUIDE.md](./RELEASE_GUIDE.md)
-- Ejecución: `./release.sh` (6-7 minutos, cero pasos manuales)
+### Persistencia y estabilidad
 
-## Novedades v1.5.2
+- Sesion persistente por servicio (cookies/localStorage/IndexedDB).
+- Manejo de salud y reintentos para procesos criticos.
+- Cache local de artwork.
+- Estrategias de fallback para GPU/sandbox en Linux.
 
-- Sistema de feedback UX con toasts en cola, autocierre y animaciones.
-- Logger centralizado para trazabilidad de errores y eventos de UI.
-- Mejoras de accesibilidad WCAG 2.1 AA (focus-visible, etiquetas ARIA y soporte semantic HTML).
-- Respeto de `prefers-reduced-motion` para experiencia accesible.
-- Refinamientos de estabilidad Linux en MPRIS, deduplicacion de eventos y hardening de metadata.
-- Flujo de release automatizado por tags `v*` via GitHub Actions.
+### DRM y media
+
+- Integracion Widevine para compatibilidad con streaming protegido.
+- Configuracion de pipeline para castLabs WVCUS en CI.
+- Validacion de libreria Widevine en install:
+  - `node_modules/electron/dist/libwidevinecdm.so`
 
 ## Stack tecnico
 
 - Electron (main/preload)
-- React 18 + Zustand (renderer)
-- Vite (build frontend)
-- electron-store (persistencia de settings)
-- dbus-next (MPRIS)
-- discord-rpc (Rich Presence)
-- electron-updater (actualizaciones)
+- React 18
+- Zustand
+- Vite
+- electron-builder
+- electron-updater
+- electron-store
+- dbus-next
+- discord-rpc
 
-## Arquitectura 
+## Arquitectura del proyecto
 
-### Main process
+- `main.js`: ciclo de vida Electron, BrowserView, IPC e integraciones.
+- `preload.js`: bridge seguro para renderer.
+- `renderer/src/`: UI React y estado global.
+- `integrations/`: Discord, Last.fm, MPRIS, notificaciones, updater.
+- `services/`: retry/health/gpu/autostart/cache/adapters.
+- `tests/`: unit tests de componentes de estabilidad.
 
-- Gestion de BrowserView por servicio activo
-- Orquestacion de IPC
-- Integraciones de sistema (tray, shortcuts, notificaciones, MPRIS)
-- Persistencia de configuraciones
-- Fallback de estabilidad (GPU/sandbox)
+## Requisitos
 
-### Preload bridge
+- Linux x64
+- Node.js 20 LTS
+- npm
+- git
 
-- API segura expuesta a renderer via contextBridge
-- Wrappers de IPC con manejo de errores
+## Instalacion para desarrollo
 
-### Renderer
+```bash
+npm install
+npm run dev
+```
 
-- UI React (views, settings, player shell)
-- Store global Zustand para estado de app
-- Tema dinamico por artwork + fallback de tema base
+## Scripts principales
 
-## Funcionalidad incluida
+```bash
+npm run dev
+npm run build
+npm run test
+npm run test:unit
+npm run test:syntax
+npm run release:linux
+npm run release:publish
+```
 
-### Core
+## Build local
 
-- Multi-servicio con ultima sesion recordada
-- Single instance lock + focus de instancia activa
-- Modo inmersivo (oculta sidebar, expande contenido)
-- Volumen persistente
+```bash
+npm install
+npm run build
+```
 
-### Integraciones
+Artefactos esperados:
 
-- Tray menu con acciones rapidas
-- Autostart Linux (`~/.config/autostart/melo.desktop`)
-- Media keys globales (play/pause, next, previous)
-- Notificaciones de cambio de track
-- MPRIS (`org.mpris.MediaPlayer2.melo`)
-- Discord Rich Presence
-- Last.fm scrobbling
+- `dist-electron/Melo-1.6.3.AppImage`
+- `dist-electron/melo_1.6.3_amd64.deb`
 
-### Estabilidad y performance
-
-- Debounce/dedupe de `media:update` en main process
-- Deduplicacion de `PropertiesChanged` en MPRIS
-- Hardening de metadata MPRIS (limpieza en estado idle/stopped)
-- Artwork cache local en `~/.cache/melo/art`
-- Logging verbose desactivado por defecto
-
-## Estructura relevante del repo
-
-- `main.js`: ciclo de vida Electron + IPC + integraciones
-- `preload.js`: bridge seguro entre renderer y main
-- `renderer/src/`: app React (UI)
-- `integrations/`: Discord, Last.fm, MPRIS, notificaciones, updater
-- `services/`: autostart, cache, health/retry, adapters
-- `tests/`: unit tests de modulos criticos
-
-## Instalacion
+## Instalacion de artefactos
 
 ### AppImage
 
@@ -156,108 +138,68 @@ sudo dpkg -i dist-electron/melo_*.deb
 sudo apt-get install -f -y
 ```
 
-## Reinstalacion limpia para QA (.deb)
+## Pipeline de release (produccion)
+
+Workflow principal:
+
+- `.github/workflows/release.yml`
+
+Reglas clave del pipeline:
+
+1. Ejecuta en `ubuntu-latest` con Node 20.
+2. Fija version de app a `1.6.3`.
+3. Instala Electron castLabs con fallback secuencial:
+   - `28.2.10+wvcus`
+   - `27.3.11+wvcus`
+   - `26.6.10+wvcus`
+4. Nunca usa castLabs 30.x.
+5. En cada intento limpia:
+   - `node_modules`
+   - `~/.cache/electron`
+   - `package-lock.json`
+6. Hace reintentos de `npm install` por version.
+7. Requiere validacion de Widevine (`libwidevinecdm.so`).
+8. Si castLabs falla en todas las versiones:
+   - fallback a Electron oficial solo debug
+   - marca `DEBUG_BUILD=true`
+   - bloquea publicacion de produccion
+9. Solo publica release si castLabs fue exitoso.
+
+Workflow opcional de debug:
+
+- `.github/workflows/release-debug.yml`
+- Se activa cuando falla `Release Melo` y sube logs como artifact.
+
+## Flujo de release recomendado
+
+1. Confirmar cambios:
 
 ```bash
-pkill -f '/melo|Melo' || true
-TS=$(date +%Y%m%d-%H%M%S)
-mkdir -p "$HOME/.melo-backups"
-[ -d "$HOME/.config/melo" ] && mv "$HOME/.config/melo" "$HOME/.melo-backups/melo-config-$TS"
-[ -d "$HOME/.cache/melo" ] && mv "$HOME/.cache/melo" "$HOME/.melo-backups/melo-cache-$TS"
-sudo dpkg --purge melo || true
-sudo dpkg -i dist-electron/melo_*.deb
-sudo apt-get install -f -y
+git status
 ```
 
-Verificacion rapida:
+2. Crear commit en `main`.
+
+3. Crear tag de release:
 
 ```bash
-dpkg -s melo | grep -E '^(Package|Version|Status):'
-which melo
+git tag -a v1.6.3 -m "Release 1.6.3"
 ```
 
-## Desarrollo
-
-Requisitos:
-
-- Node.js 20+
-- npm
-- git
+4. Publicar:
 
 ```bash
-npm install
-npm run dev
+git push origin main
+git push origin v1.6.3
 ```
 
-## Release Automation (v1.5.4+)
+5. Verificar en GitHub Actions que el job `Release Melo` termine en verde.
 
-### Quick Start
+## Notas de operacion
 
-```bash
-# 1. Verificar prerequisitos
-git status               # Debe estar limpio
-git branch              # Debe ser 'main'
-git tag | grep v1.5.3   # Debe estar vacío
-
-# 2. Ejecutar release (único comando, 6-7 minutos)
-./release.sh
-
-# 3. Verificar éxito
-git tag | grep v1.5.3
-ls -lh dist-electron/Melo-*.AppImage
-```
-
-### Qué hace el script
-
-| Paso | Acción | Verificación |
-|------|--------|-------------|
-| 1 | Pre-flight checks | 6 validaciones |
-| 2 | Clean artifacts | node_modules, dist, caches |
-| 3 | npm install | Instalación fresh |
-| 4 | Build project | Vite + Electron Builder |
-| 5 | Verify artifacts | AppImage + .deb |
-| 6 | Update version | 1.5.2 → 1.5.3 |
-| 7 | Git commit | Mensaje descriptivo |
-| 8 | Git tag | Crea v1.5.3 |
-| 9 | Git push | push origin main |
-| 10 | GitHub release | (Si `gh` CLI disponible) |
-
-**Status**: ✅ Production-ready, fully automated, fail-fast design
-
-Ver guía completa: [RELEASE_GUIDE.md](./RELEASE_GUIDE.md)
-
-## Scripts
-
-```bash
-npm run test:syntax
-npm run test:unit
-npm run test
-npm run release:linux
-```
-
-Nota: `release.sh` maneja toda la orquestación de release, incluyendo versioning y push a GitHub.
-
-## Checklist de release (automated via release.sh)
-
-El script `release.sh` automáticamente verifica:
-
-1. ✅ Build Linux actualizado
-2. ✅ Artefactos validados (AppImage, .deb)
-3. ✅ Version actualizada en package.json
-4. ✅ Git commit creado
-5. ✅ Tag v1.5.3 creado
-6. ✅ Push a main completado
-7. ✅ GitHub release creada (opcional)
-
-Ejecución: `./release.sh` (única línea necesaria)
-
-## Debug opcional
-
-Activar logging verbose de Chromium solo cuando sea necesario:
-
-```bash
-MELO_VERBOSE_LOGGING=1 npm run dev
-```
+- Si `DEBUG_BUILD=true`, el release se bloquea por seguridad.
+- Sin `GH_TOKEN` valido, `release:publish` no puede publicar en GitHub.
+- Para diagnostico de fallos de release, revisar artifacts del workflow `Release Debug Melo`.
 
 ## Licencia
 

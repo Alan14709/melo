@@ -3,20 +3,20 @@
 set -euo pipefail
 
 # ═══════════════════════════════════════════════════════════════════════════
-# MELO RELEASE WORKFLOW - v1.6.2
+# MELO RELEASE WORKFLOW - v1.6.3
 # Production-safe, zero-manual-intervention release script
 # ═══════════════════════════════════════════════════════════════════════════
 
 # CONFIG
-TARGET_VERSION="1.6.2"
+TARGET_VERSION="1.6.3"
 RELEASE_TAG="v${TARGET_VERSION}"
 GIT_BRANCH="main"
 RELEASE_MESSAGE="release: v${TARGET_VERSION} - stability, DRM fixes, session persistence, UI improvements"
 RELEASE_NOTES="Major release with DRM fixes, session persistence and UI improvements"
 
-# ELECTRON castLabs CONFIG (matches .npmrc and workflow/release.yml)
-export ELECTRON_MIRROR="https://github.com/castlabs/electron-releases/releases/download/"
-export ELECTRON_CUSTOM_DIR="v30.3.1+wvcus"
+# ELECTRON CONFIG
+# Local release uses standard Electron from package.json.
+unset ELECTRON_MIRROR ELECTRON_CUSTOM_DIR ELECTRON_CUSTOM_VERSION 2>/dev/null || true
 
 # COLORS
 readonly RED='\033[0;31m'

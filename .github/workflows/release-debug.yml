@@ -1,0 +1,58 @@
+name: Release Debug Melo
+
+on:
+  workflow_run:
+    workflows: ["Release Melo"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  debug:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Collect debug logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p debug-logs
+
+          {
+            echo "workflow=${GITHUB_WORKFLOW}"
+            echo "event_workflow=${{ github.event.workflow_run.name }}"
+            echo "conclusion=${{ github.event.workflow_run.conclusion }}"
+            echo "head_branch=${{ github.event.workflow_run.head_branch }}"
+            echo "head_sha=${{ github.event.workflow_run.head_sha }}"
+            echo "run_number=${{ github.event.workflow_run.run_number }}"
+            echo "run_attempt=${{ github.event.workflow_run.run_attempt }}"
+          } > debug-logs/workflow-context.txt
+
+          node -v > debug-logs/node-version.txt
+          npm -v > debug-logs/npm-version.txt
+          npm config list > debug-logs/npm-config.txt || true
+
+          if [[ -f package.json ]]; then
+            cp package.json debug-logs/package.json
+          fi
+
+          if [[ -f package-lock.json ]]; then
+            cp package-lock.json debug-logs/package-lock.json
+          fi
+
+      - name: Upload debug logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: melo-release-debug-${{ github.run_id }}
+          path: debug-logs/
+          if-no-files-found: error
