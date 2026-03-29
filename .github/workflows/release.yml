@@ -86,8 +86,7 @@ jobs:
           ELECTRON_MIRROR: https://github.com/castlabs/electron-releases/releases/download/
           ELECTRON_CUSTOM_VERSION: ${{ steps.castlabs_install.outputs.selected_castlabs_version }}
           ELECTRON_CUSTOM_DIR: ${{ steps.castlabs_install.outputs.selected_custom_dir }}
-          ELECTRON_USE_REMOTE_CHECKSUMS: true
-          electron_use_remote_checksums: true
+          ELECTRON_USE_REMOTE_CHECKSUMS: "true"
         shell: bash
         run: |
           set -euo pipefail
