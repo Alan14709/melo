@@ -123,7 +123,7 @@ jobs:
         run: |
           set -euo pipefail
           API_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}"
-          RELEASE_ID="$(curl -sS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "${API_URL}/releases/tags/${GITHUB_REF_NAME}" | jq -r '.id // empty')"
+          RELEASE_ID="$(curl -sS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "${API_URL}/releases?per_page=100" | jq -r --arg TAG "${GITHUB_REF_NAME}" '.[] | select(.tag_name == $TAG) | .id' | head -n1)"
           if [[ -z "${RELEASE_ID}" ]]; then
             echo "::error::Release for ${GITHUB_REF_NAME} was not created by electron-builder"
             exit 1
