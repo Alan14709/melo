@@ -94,7 +94,9 @@ jobs:
             exit 1
           fi
           echo "Building Melo ${APP_VERSION} with castLabs Electron ${ELECTRON_CUSTOM_VERSION} (custom dir ${ELECTRON_CUSTOM_DIR})"
-          npm run build
+          npm run prebuild
+          npx vite build
+          npx electron-builder --config.electronVersion="${ELECTRON_CUSTOM_VERSION}" --publish never
 
       - name: Publish GitHub release
         if: steps.castlabs_install.outputs.install_mode == 'castlabs'

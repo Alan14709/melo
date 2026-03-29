@@ -165,6 +165,7 @@ Reglas clave del pipeline:
    - bloquea publicacion de produccion
 9. Solo publica release si castLabs fue exitoso.
 10. Publicacion idempotente: build + upload de artefactos a release con `softprops/action-gh-release`.
+11. El empaquetado fuerza `electronVersion=<version+wvcus>` en electron-builder para evitar 404 por nombre de artefacto.
 
 Workflow opcional de debug:
 
