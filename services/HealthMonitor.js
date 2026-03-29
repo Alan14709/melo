@@ -1,3 +1,5 @@
+const STALE_STATE_THRESHOLD_MS = 60000
+
 class HealthMonitor {
   constructor(playbackState, logger) {
     this.playbackState = playbackState
@@ -77,8 +79,15 @@ class HealthMonitor {
 
     const stateAge = now - (state.timestamp || 0)
     const isRecentlyActive = now - this.lastAdapterActionTime < 60000
+    const hasEverPlayed = Boolean(
+      state.isPlaying
+      || state.status === 'playing'
+      || state.status === 'paused'
+      || state.trackId
+      || state.title
+    )
 
-    if (hasStateTimestamp && isRecentlyActive && stateAge > 10000) {
+    if (hasStateTimestamp && isRecentlyActive && hasEverPlayed && stateAge > STALE_STATE_THRESHOLD_MS) {
       return {
         status: 'error',
         reason: 'stale_state',

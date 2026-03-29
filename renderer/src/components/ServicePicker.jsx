@@ -47,6 +47,8 @@ export default function ServicePicker({ onSelect }) {
             service={service}
             onClick={() => onSelect(service)}
             delayMs={index * 70}
+            className="glass-card animate-spring-in"
+            style={{ animationDelay: `${index * 60}ms` }}
             isConnected={connectedIds.includes(service.id)}
           />
         ))}

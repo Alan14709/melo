@@ -31,12 +31,12 @@ export default function Sidebar() {
           {list.map((service) => (
             <button
               key={service.id}
-              className={`service-item ${activeServiceId === service.id ? 'active' : ''}`}
+              className={`service-item sidebar-service-item ${activeServiceId === service.id ? 'active' : ''}`}
               style={{ '--service-color': service.color }}
               onClick={() => handleServiceClick(service)}
               title={service.name}
             >
-              <span className={`service-dot ${isPlaying && activeServiceId === service.id ? 'playing-dot' : ''}`} />
+              <span className={`service-dot ${isPlaying && activeServiceId === service.id ? 'playing' : ''}`} />
               <span>{service.name}</span>
             </button>
           ))}
@@ -51,7 +51,7 @@ export default function Sidebar() {
       <div className="sidebar-section">
         <p className="sidebar-section-title">Melo</p>
         <button
-          className={`service-item ${currentView === 'stats' ? 'active' : ''}`}
+          className={`service-item sidebar-service-item ${currentView === 'stats' ? 'active' : ''}`}
           onClick={() => setView('stats')}
         >
           <BarChart2 size={16} />
@@ -59,7 +59,7 @@ export default function Sidebar() {
           <span className="version-badge">v0.5</span>
         </button>
         <button
-          className="service-item"
+          className="service-item sidebar-service-item"
           onClick={() => window.melo.miniToggle()}
         >
           <PictureInPicture size={16} />

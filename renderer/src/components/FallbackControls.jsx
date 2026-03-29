@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { memo } from 'react'
 
 const REASON_MAP = {
   adapter_timeout: 'Sin respuesta del adaptador de reproduccion',
@@ -14,10 +14,14 @@ const FALLBACK_PHASE_MAP = {
   exhausted: 'No se pudo recuperar renderer automaticamente',
 }
 
-export default function FallbackControls({ health, fallbackStatus }) {
+function FallbackControls({ health, fallbackStatus }) {
+
   const healthError = health && health.status === 'error'
   const hasFallback = fallbackStatus && fallbackStatus.phase && fallbackStatus.phase !== 'idle'
-  if (!healthError && !hasFallback) return null
+
+  const shouldRenderHealth = healthError || hasFallback
+
+  if (!shouldRenderHealth) return null
 
   const reason = REASON_MAP[health?.reason] || health?.reason || 'error_desconocido'
   const fallbackMessage = fallbackStatus?.message
@@ -38,7 +42,7 @@ export default function FallbackControls({ health, fallbackStatus }) {
   }
 
   return (
-    <div className="health-banner" role="alert">
+    <div className="health-banner" role="status" aria-live="polite">
       <div className="health-banner-copy">
         <strong>Modo degradado</strong>
         {healthError && <span>{reason}</span>}
@@ -59,3 +63,5 @@ export default function FallbackControls({ health, fallbackStatus }) {
     </div>
   )
 }
+
+export default memo(FallbackControls)

@@ -53,6 +53,15 @@ export const usePlayerStore = create((set) => ({
   autoUpdateEnabled: false,
   playHistory: [],
 
+  // UI State System (Fase 1 - UX Feedback)
+  // Estructura: { [feature]: 'idle' | 'loading' | 'success' | 'error' }
+  uiState: {
+    settings: 'idle',      // carga/guardado de settings
+    playback: 'idle',      // operaciones de playback
+    connection: 'idle',    // conexión a servicios
+    sync: 'idle',          // sincronización
+  },
+
   // Acciones
   setTrack: (track) => set({ currentTrack: track }),
   setPlaying: (v) => set({ isPlaying: v }),
@@ -121,6 +130,11 @@ export const usePlayerStore = create((set) => ({
 
   setCommandPaletteOpen: (v) => set({ commandPaletteOpen: v }),
   setMiniPlayerOpen: (v) => set({ miniPlayerOpen: v }),
+
+  // UI State management (Fase 1)
+  setUIState: (feature, state) => set((s) => ({
+    uiState: { ...s.uiState, [feature]: state }
+  })),
 
   addToHistory: (track) => set((s) => ({
     playHistory: [

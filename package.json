@@ -1,14 +1,17 @@
 {
   "name": "melo",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Tu musica, sin limites",
   "author": "Melo Maintainers",
   "main": "main.js",
   "scripts": {
-    "dev": "fuser -k 5173/tcp; concurrently \"vite\" \"wait-on tcp:5173 && electron . --no-sandbox\"",
+    "dev": "pkill -f \"[e]lectron/dist/electron\" >/dev/null 2>&1 || true; fuser -k 5173/tcp; concurrently \"vite\" \"wait-on tcp:5173 && node scripts/electron-launcher.js .\"",
+    "dev:sandbox-fallback": "pkill -f \"[e]lectron/dist/electron\" >/dev/null 2>&1 || true; fuser -k 5173/tcp; concurrently \"vite\" \"wait-on tcp:5173 && node scripts/electron-launcher.js . --melo-no-sandbox-fallback --no-sandbox --disable-setuid-sandbox\"",
     "prebuild": "node -e \"require('fs').mkdirSync('dist/renderer', {recursive:true})\"",
     "build": "vite build && electron-builder",
-    "start": "electron . --no-sandbox",
+    "start": "node scripts/electron-launcher.js .",
+    "start:sandbox-fallback": "node scripts/electron-launcher.js . --melo-no-sandbox-fallback --no-sandbox --disable-setuid-sandbox",
+    "gpu:reset": "node -e \"const fs=require('fs');const os=require('os');const path=require('path');const p=path.join(os.tmpdir(),'melo-gpu-manager-state.json');if(fs.existsSync(p)){fs.unlinkSync(p);console.log('GPU state reset:',p)}else{console.log('GPU state file not found:',p)}\"",
     "test": "npm run test:unit && npm run test:syntax",
     "test:unit": "node --test tests/*.test.js",
     "test:syntax": "node --check main.js && node --check preload.js && node --check services/RetryManager.js && node --check services/HealthMonitor.js",
@@ -82,10 +85,6 @@
       ],
       "category": "Audio",
       "icon": "assets/icon.png",
-      "executableArgs": [
-        "--no-sandbox",
-        "--disable-setuid-sandbox"
-      ],
       "maintainer": "Melo Maintainers"
     },
     "deb": {

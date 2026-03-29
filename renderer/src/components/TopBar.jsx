@@ -2,7 +2,7 @@ import React, { memo } from 'react'
 import { Minus, Square, X, Settings, Music2 } from 'lucide-react'
 import { usePlayerStore } from '../store/usePlayerStore'
 
-function TopBar({ onSettingsOpen }) {
+function TopBar({ onSettingsOpen, immersive = false, onExitImmersive }) {
   const { currentTrack, isPlaying } = usePlayerStore()
 
   return (
@@ -28,6 +28,16 @@ function TopBar({ onSettingsOpen }) {
       </div>
 
       <div className="topbar-right no-drag">
+        {immersive && (
+          <button
+            className="topbar-icon-btn immersive-topbar-exit"
+            onClick={onExitImmersive}
+            title="Salir modo inmersivo"
+          >
+            Salir
+          </button>
+        )}
+
         <button
           className="topbar-icon-btn"
           onClick={onSettingsOpen}

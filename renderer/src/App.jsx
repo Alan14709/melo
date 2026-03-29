@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePlayerStore } from './store/usePlayerStore'
 import ServicePicker from './components/ServicePicker.jsx'
 import LoginView from './components/LoginView.jsx'
@@ -11,16 +11,25 @@ import StatsView from './components/StatsView.jsx'
 import UpdateBanner from './components/UpdateBanner.jsx'
 import OfflineBanner from './components/OfflineBanner.jsx'
 import FallbackControls from './components/FallbackControls.jsx'
+import ToastManager from './components/ToastManager.jsx'
+import { getUISafeMode } from './hooks/useUISafeMode'
+import { SERVICES } from '../../services/registry'
 import { extractPalette } from './utils/colorExtractor'
 import { applyTheme, applyDynamicPalette } from './utils/applyTheme'
 
 export default function App() {
+  const didInitLastServiceRef = useRef(false)
   const lastMediaRef = useRef('')
   const lastPlaybackRef = useRef(null)
   const lastThemeArtworkRef = useRef('')
   const metadataDebounceRef = useRef(null)
   const [healthStatus, setHealthStatus] = useState({ status: 'unknown', reason: null })
   const [fallbackStatus, setFallbackStatus] = useState({ phase: 'idle', message: null, mitigated: false })
+  const [immersive, setImmersive] = useState(false)
+  const shortcutStateRef = useRef({
+    commandPaletteOpen: false,
+    immersive: false,
+  })
   const {
     currentView, setView,
     pendingService, setPendingService,
@@ -34,11 +43,82 @@ export default function App() {
     setTheme,
     hydrateSettings,
     setAccentColor,
-    immersiveEnabled,
   } = usePlayerStore()
+  const uiSafe = getUISafeMode()
+
+  const servicesList = useMemo(() => Object.values(SERVICES), [])
+
+  const isTypingContext = (target) => {
+    const active = target || document.activeElement
+    if (!active) return false
+    const tagName = active.tagName
+    return ['INPUT', 'TEXTAREA'].includes(tagName) || active.isContentEditable
+  }
+
+  const handleSwitchService = useCallback((service) => {
+    if (!service) return
+
+    const { activeServiceId, currentView: view } = usePlayerStore.getState()
+    if (service.id === activeServiceId) {
+      if (view === 'stats') setView('player')
+      return
+    }
+
+    window.melo.switchService(service.id, service.url, service)
+    setActiveService(service.id, service.color, service.name)
+    setView('player')
+  }, [setActiveService, setView])
+
+  const commandActions = useMemo(() => ([
+    {
+      id: 'spotify',
+      label: 'Switch to Spotify',
+      action: () => handleSwitchService(SERVICES.spotify),
+    },
+    {
+      id: 'settings',
+      label: 'Open Settings',
+      action: () => setSettingsOpen(true),
+    },
+    {
+      id: 'theme',
+      label: 'Change Theme',
+      action: () => setSettingsOpen(true),
+    },
+    {
+      id: 'immersive-toggle',
+      label: immersive ? 'Exit Immersive Mode' : 'Enter Immersive Mode',
+      action: () => setImmersive((prev) => !prev),
+    },
+    {
+      id: 'play-pause',
+      label: 'Play / Pause',
+      action: () => window.melo.playerAction('play'),
+    },
+    {
+      id: 'next-track',
+      label: 'Next Track',
+      action: () => window.melo.playerAction('next'),
+    },
+    {
+      id: 'apple',
+      label: 'Switch to Apple Music',
+      action: () => handleSwitchService(SERVICES.appleMusic),
+    },
+    {
+      id: 'youtube',
+      label: 'Switch to YT Music',
+      action: () => handleSwitchService(SERVICES.youtubeMusic),
+    },
+  ]), [handleSwitchService, immersive, setSettingsOpen])
 
   // Cargar preferencias persistidas desde el proceso principal.
   useEffect(() => {
+    // En React.StrictMode (dev) este efecto puede ejecutarse 2 veces.
+    // Evita doble switch inicial del servicio y duplicados en la cola de main.
+    if (didInitLastServiceRef.current) return
+    didInitLastServiceRef.current = true
+
     const init = async () => {
       try {
         const settings = await window.melo.getSettings()
@@ -141,6 +221,28 @@ export default function App() {
 
     window.melo.onMediaUpdate(handleMediaUpdate)
     window.melo.onServiceActive(handleServiceActive)
+    window.melo.onShortcut?.((payload) => {
+      const shortcut = payload?.shortcut
+      if (shortcut === 'cmdk') {
+        setCommandPaletteOpen(!usePlayerStore.getState().commandPaletteOpen)
+        return
+      }
+
+      if (shortcut === 'escape') {
+        if (usePlayerStore.getState().commandPaletteOpen) {
+          setCommandPaletteOpen(false)
+          return
+        }
+        if (shortcutStateRef.current.immersive) {
+          setImmersive(false)
+        }
+        return
+      }
+
+      if (shortcut === 'space') {
+        window.melo.playerAction('play')
+      }
+    })
     window.melo.health?.onChange?.((status) => {
       if (status && typeof status === 'object') setHealthStatus(status)
     })
@@ -162,10 +264,11 @@ export default function App() {
       clearTimeout(metadataDebounceRef.current)
       window.melo.removeAllListeners('media:update')
       window.melo.removeAllListeners('service:active')
+      window.melo.removeAllListeners('shortcut:event')
       window.melo.removeAllListeners('health:status')
       window.melo.removeAllListeners('fallback:status')
     }
-  }, [])
+  }, [setCommandPaletteOpen])
 
   useEffect(() => {
     const { customTheme } = usePlayerStore.getState()
@@ -173,7 +276,8 @@ export default function App() {
   }, [theme])
 
   useEffect(() => {
-    if (settingsOpen || currentView !== 'player') {
+    // BrowserView tapa overlays del renderer; ocultarlo cuando haya overlays globales.
+    if (settingsOpen || commandPaletteOpen || currentView !== 'player') {
       window.melo.hideBrowserView()
     } else {
       window.melo.showBrowserView()
@@ -182,18 +286,50 @@ export default function App() {
     return () => {
       window.melo.showBrowserView()
     }
-  }, [currentView, settingsOpen])
+  }, [commandPaletteOpen, currentView, settingsOpen])
+
+  useEffect(() => {
+    shortcutStateRef.current = {
+      commandPaletteOpen,
+      immersive,
+    }
+  }, [commandPaletteOpen, immersive])
+
+  useEffect(() => {
+    if (currentView !== 'player' && immersive) {
+      setImmersive(false)
+    }
+  }, [currentView, immersive])
+
+  useEffect(() => {
+    // Sincroniza bounds del BrowserView en main con el modo inmersivo UI.
+    window.melo.saveSettings('immersiveEnabled', immersive).catch(() => {})
+  }, [immersive])
 
   useEffect(() => {
     const onKeyDown = (event) => {
-      const isCmdK = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k'
-      if (!isCmdK) return
+      if (event.repeat) return
+
+      if (isTypingContext(event.target)) {
+        return
+      }
+
+      if (shortcutStateRef.current.commandPaletteOpen) return
+
+      const isServiceShortcut = (event.metaKey || event.ctrlKey) && ['1', '2', '3'].includes(event.key)
+      if (!isServiceShortcut) return
+
+      const serviceIndex = Number(event.key) - 1
+      const service = servicesList[serviceIndex]
+      if (!service) return
+
       event.preventDefault()
-      setCommandPaletteOpen(!commandPaletteOpen)
+      handleSwitchService(service)
     }
+
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [commandPaletteOpen, setCommandPaletteOpen])
+  }, [handleSwitchService, servicesList, setCommandPaletteOpen])
 
   const handleSelectService = useCallback((service) => {
     setPendingService(service)
@@ -211,8 +347,21 @@ export default function App() {
     setPendingService(null)
   }, [pendingService, setPendingService, setView])
 
+  const renderSidebarRail = useCallback(() => (
+    <div className="sidebar-rail">
+      <Sidebar />
+      <div className="sidebar-status-section" aria-label="Estado y notificaciones">
+        <FallbackControls health={healthStatus} fallbackStatus={fallbackStatus} />
+        <OfflineBanner />
+        <UpdateBanner />
+      </div>
+    </div>
+  ), [fallbackStatus, healthStatus])
+
   return (
-    <div className="app-root">
+    <div className={`app-root ${uiSafe.isSafeMode ? 'safe-mode' : ''}`}>
+      <ToastManager />
+
       {currentView === 'picker' && (
         <ServicePicker onSelect={handleSelectService} />
       )}
@@ -226,10 +375,16 @@ export default function App() {
       )}
 
       {currentView === 'player' && (
-        <div className="player-layout">
-          <TopBar onSettingsOpen={() => setSettingsOpen(true)} />
+        <div className={`player-layout ${immersive ? 'immersive-mode' : ''}`}>
+          <TopBar
+            onSettingsOpen={() => setSettingsOpen(true)}
+            immersive={immersive}
+            onExitImmersive={() => setImmersive(false)}
+          />
           <div className="player-body">
-            {!immersiveEnabled && <Sidebar />}
+            <div className={`sidebar-shell ${immersive ? 'immersive-hidden' : ''}`}>
+              {renderSidebarRail()}
+            </div>
             <div className="browser-area">
               {settingsOpen && (
                 <div className="browser-placeholder">
@@ -239,9 +394,6 @@ export default function App() {
             </div>
           </div>
           <PlayerBar />
-          <FallbackControls health={healthStatus} fallbackStatus={fallbackStatus} />
-          <OfflineBanner />
-          <UpdateBanner />
           <SettingsPanel
             isOpen={settingsOpen}
             onClose={() => setSettingsOpen(false)}
@@ -249,21 +401,21 @@ export default function App() {
           <CommandPalette
             isOpen={commandPaletteOpen}
             onClose={() => setCommandPaletteOpen(false)}
+            actions={commandActions}
           />
         </div>
       )}
 
       {currentView === 'stats' && (
         <div className="player-layout">
-          <TopBar onSettingsOpen={() => setSettingsOpen(true)} />
+          <TopBar onSettingsOpen={() => setSettingsOpen(true)} immersive={false} />
           <div className="player-body">
-            <Sidebar />
+            <div className="sidebar-shell">
+              {renderSidebarRail()}
+            </div>
             <StatsView />
           </div>
           <PlayerBar />
-          <FallbackControls health={healthStatus} fallbackStatus={fallbackStatus} />
-          <OfflineBanner />
-          <UpdateBanner />
           <SettingsPanel
             isOpen={settingsOpen}
             onClose={() => setSettingsOpen(false)}
@@ -271,6 +423,7 @@ export default function App() {
           <CommandPalette
             isOpen={commandPaletteOpen}
             onClose={() => setCommandPaletteOpen(false)}
+            actions={commandActions}
           />
         </div>
       )}

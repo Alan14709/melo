@@ -27,6 +27,7 @@ const { BrowserViewAdapter } = require('./services/adapters/BrowserViewAdapter')
 const { playbackState } = require('./services/adapters/PlaybackState')
 const { RetryManager } = require('./services/RetryManager')
 const { HealthMonitor } = require('./services/HealthMonitor')
+const gpuManager = require('./services/gpuManager')
 const {
   enableAutostart,
   disableAutostart,
@@ -37,12 +38,18 @@ const logger = require('./services/Logger')
 const DEBUG_MODE = process.env.DEBUG === '1' || process.env.DEBUG === 'true'
 if (DEBUG_MODE) logger.setLevel('debug')
 
+// GPU Fallback - 3-tier progressive system
+const GPU_FALLBACK_TIERS = {
+  NATIVE_GPU: 'native-gpu',         // Primary: Full GPU, no special flags
+  SWIFTSHADER: 'swiftshader',       // Secondary: Fallback to SwiftShader (software GPU)
+  SOFTWARE: 'software',              // Tertiary: Last resort, disableHardwareAcceleration()
+}
+
 const RENDERER_FALLBACK_FLAGS = {
   gpu: '--melo-gpu-fallback',
+  swiftshader: '--melo-swiftshader-fallback',
+  software: '--melo-software-fallback',
   sandbox: '--melo-no-sandbox-fallback',
-}
-const rendererFallbackState = {
-  relaunchScheduled: false,
 }
 const performanceMetrics = {
   appStartAt: Date.now(),
@@ -70,6 +77,7 @@ const fallbackStatus = {
   mitigated: false,
   updatedAt: new Date().toISOString(),
 }
+const GPU_STARTUP_PROBE_DELAY_MS = Number(process.env.MELO_GPU_STARTUP_PROBE_DELAY_MS || 8000)
 
 const SETTINGS_DEFAULTS = {
   mediaKeysEnabled: true,
@@ -85,13 +93,78 @@ const SETTINGS_DEFAULTS = {
   hasShownTrayHint: false,
 }
 
+function canSendToWebContents(webContents) {
+  if (!webContents || webContents.isDestroyed()) return false
+  if (typeof webContents.isCrashed === 'function' && webContents.isCrashed()) return false
+  try {
+    if (!webContents.mainFrame) return false
+  } catch (_) {
+    return false
+  }
+  return true
+}
+
+function safeSendToMainWindow(channel, payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) return false
+  if (!canSendToWebContents(mainWindow.webContents)) return false
+  try {
+    mainWindow.webContents.send(channel, payload)
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
+function safeSendToWindow(targetWindow, channel, payload) {
+  if (!targetWindow || targetWindow.isDestroyed()) return false
+  if (!canSendToWebContents(targetWindow.webContents)) return false
+  try {
+    targetWindow.webContents.send(channel, payload)
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
 const MEDIA_SHORTCUTS = ['MediaPlayPause', 'MediaNextTrack', 'MediaPreviousTrack']
+const FORWARDED_SHORTCUT_CHANNEL = 'shortcut:event'
+
+function resolveShortcutFromInput(input) {
+  const key = String(input?.key || '').toLowerCase()
+  if (!key) return null
+
+  if (key === 'escape') return 'escape'
+  if ((input?.control || input?.meta) && key === 'k') return 'cmdk'
+  if (key === ' ' || key === 'space') return 'space'
+
+  return null
+}
+
+function emitForwardedShortcut(shortcut, source = 'unknown') {
+  if (!shortcut) return
+  safeSendToMainWindow(FORWARDED_SHORTCUT_CHANNEL, {
+    shortcut,
+    source,
+    at: Date.now(),
+  })
+}
+
+function attachShortcutForwarding(webContents, source) {
+  if (!webContents || webContents.isDestroyed()) return
+
+  webContents.on('before-input-event', (event, input) => {
+    const shortcut = resolveShortcutFromInput(input)
+    if (!shortcut) return
+
+    // Evitar que BrowserView consuma los atajos cuando tiene foco.
+    event.preventDefault()
+    emitForwardedShortcut(shortcut, source)
+  })
+}
 
 function updateFallbackStatus(patch = {}) {
   Object.assign(fallbackStatus, patch, { updatedAt: new Date().toISOString() })
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('fallback:status', { ...fallbackStatus })
-  }
+  safeSendToMainWindow('fallback:status', { ...fallbackStatus })
 }
 
 function recordFallbackIncident(event, payload = {}) {
@@ -101,7 +174,9 @@ function recordFallbackIncident(event, payload = {}) {
     ...payload,
   }
   if (event === 'gpu_fallback_triggered') fallbackMetrics.gpuFallbacksTriggered += 1
-  if (event === 'no_sandbox_fallback_triggered') fallbackMetrics.noSandboxFallbacksTriggered += 1
+  if (event === 'no_sandbox_fallback_triggered' || event === 'sandbox_fallback_triggered') {
+    fallbackMetrics.noSandboxFallbacksTriggered += 1
+  }
   if (event === 'fallback_exhausted') fallbackMetrics.fallbackExhausted += 1
   if (event === 'launch_failure') fallbackMetrics.launchFailures += 1
   if (event === 'launch_success') fallbackMetrics.launchSuccesses += 1
@@ -119,7 +194,89 @@ function hasFlag(flag) {
   return process.argv.includes(flag)
 }
 
+/**
+ * Detecta el nivel actual de GPU fallback basado en los flags de línea de comandos.
+ * @returns {string} GPU_FALLBACK_TIERS tier
+ */
+function getCurrentGPUTier() {
+  if (hasFlag(RENDERER_FALLBACK_FLAGS.software)) return GPU_FALLBACK_TIERS.SOFTWARE
+  if (hasFlag(RENDERER_FALLBACK_FLAGS.swiftshader)) return GPU_FALLBACK_TIERS.SWIFTSHADER
+  if (hasFlag('--disable-gpu') || hasFlag('--disable-gpu-compositing')) {
+    return GPU_FALLBACK_TIERS.SOFTWARE
+  }
+  if (process.argv.some((arg) => String(arg).startsWith('--use-gl=swiftshader'))) {
+    return GPU_FALLBACK_TIERS.SWIFTSHADER
+  }
+  return GPU_FALLBACK_TIERS.NATIVE_GPU
+}
+
+function getEffectiveGPUTier(gpuInfo = null) {
+  const argTier = getCurrentGPUTier()
+  if (argTier !== GPU_FALLBACK_TIERS.NATIVE_GPU) return argTier
+
+  const status = gpuInfo || gpuManager.getGPUStatus()
+  if (!status || typeof status !== 'object') return argTier
+  if (status.mode === 'software') return GPU_FALLBACK_TIERS.SOFTWARE
+  if (status.mode === 'swiftshader') return GPU_FALLBACK_TIERS.SWIFTSHADER
+  if (status.fallbackActive) return GPU_FALLBACK_TIERS.SWIFTSHADER
+  return GPU_FALLBACK_TIERS.NATIVE_GPU
+}
+
+function triggerGPUTierFallback(source, details = {}) {
+  const decision = gpuManager.handleGPUCrash(source, {
+    ...details,
+    reason: details?.reason || 'gpu-crash',
+  })
+
+  if (!decision?.shouldRelaunch) return false
+
+  recordFallbackIncident('gpu_tier_fallback', {
+    source,
+    crashClass: decision.crashClass,
+    reason: decision.reason,
+    gpuCrashCount: decision.gpuCrashCount,
+    sandboxCrashCount: decision.sandboxCrashCount,
+    mode: decision.mode,
+    exitCode: decision.exitCode,
+  })
+
+  updateFallbackStatus({
+    phase: 'relaunching',
+    stage: decision.safeMode
+      ? 'gpu-safe-mode'
+      : (decision.useEglRetry
+        ? 'gpu-egl-retry'
+        : (decision.fallbackStage === 'software-1002'
+          ? 'gpu-software-fallback'
+          : (decision.useSandboxFallback
+            ? 'sandbox-fallback'
+            : (decision.useFallback ? 'gpu-fallback' : 'gpu-retry')))),
+    mitigated: false,
+    message: decision.message,
+  })
+
+  const status = gpuManager.getGPUStatus()
+  safeSendToMainWindow('gpu:status', status)
+  logger.warn('GPUManager', 'fallback_decision', {
+    source,
+    decision,
+    gpuMode: status.mode,
+  })
+
+  return gpuManager.relaunchWithFallback({
+    useFallback: decision.useFallback,
+    safeMode: decision.safeMode,
+    useSandboxFallback: decision.useSandboxFallback,
+    useEglRetry: decision.useEglRetry,
+    fallbackStage: decision.fallbackStage,
+    source,
+    reason: decision.reason,
+  })
+}
+
 function getRuntimeDiagnostics(extra = {}) {
+  const gpuInfo = gpuManager.getGPUStatus()
+  const sandboxInfo = gpuInfo.environment?.sandbox || {}
   return {
     platform: process.platform,
     arch: process.arch,
@@ -129,91 +286,95 @@ function getRuntimeDiagnostics(extra = {}) {
     display: process.env.DISPLAY || '',
     waylandDisplay: process.env.WAYLAND_DISPLAY || '',
     xdgRuntimeDir: process.env.XDG_RUNTIME_DIR || '',
-    gpuFallbackActive: hasFlag(RENDERER_FALLBACK_FLAGS.gpu) || process.env.MELO_GPU_FALLBACK === '1',
-    sandboxFallbackActive: hasFlag(RENDERER_FALLBACK_FLAGS.sandbox) || process.env.MELO_NO_SANDBOX_FALLBACK === '1',
-    linuxCompatMode: process.env.MELO_LINUX_COMPAT_MODE === '1',
+    gpuMode: gpuInfo.mode,
+    gpuVendor: gpuInfo.environment?.gpuVendor || 'unknown',
+    gpuFallbackActive: gpuInfo.fallbackActive,
+    gpuSafeModeLocked: gpuInfo.safeModeLocked,
+    gpuTier: getEffectiveGPUTier(gpuInfo),
+    gpuProfile: gpuInfo.profile || null,
+    gpuActiveFlags: gpuInfo.activeFlags || [],
+    sandboxFallbackActive: Boolean(gpuInfo.sandboxFallbackActive)
+      || hasFlag(RENDERER_FALLBACK_FLAGS.sandbox)
+      || process.env.MELO_NO_SANDBOX_FALLBACK === '1',
+    sandboxHelperUsable: sandboxInfo.usable,
+    sandboxHelperReason: sandboxInfo.reason || null,
+    sandboxHelperPath: sandboxInfo.helperPath || null,
+    sandboxHelperMode: sandboxInfo.modeOctal || null,
     argv: process.argv,
     ...extra,
   }
 }
 
-function scheduleRendererFallbackRelaunch(source, details = {}) {
-  const reason = details?.reason || 'unknown'
-  if (reason !== 'launch-failed') return false
-  if (rendererFallbackState.relaunchScheduled) return false
+function isGPUStartupStable(gpuInfo = {}) {
+  const gpuStatus = gpuInfo.featureStatus || {}
+  const webglState = String(gpuStatus?.webgl || '').toLowerCase()
+  const compositingState = String(gpuStatus?.gpu_compositing || '').toLowerCase()
 
-  const args = process.argv.slice(1)
-  const hasGpuFallback = hasFlag(RENDERER_FALLBACK_FLAGS.gpu)
-  const hasSandboxFallback = hasFlag(RENDERER_FALLBACK_FLAGS.sandbox)
+  const webglReady = !(webglState.includes('disabled') || webglState.includes('off'))
+  const compositingReady = !(compositingState.includes('disabled') || compositingState.includes('software'))
 
-  if (!hasGpuFallback) {
-    args.push(RENDERER_FALLBACK_FLAGS.gpu)
-    recordFallbackIncident('gpu_fallback_triggered', {
-      source,
-      reason,
-      serviceId: details?.serviceId || null,
-      targetUrl: details?.targetUrl || null,
-    })
-    updateFallbackStatus({
-      phase: 'relaunching',
-      stage: 'gpu',
-      mitigated: false,
-      message: 'Relaunching renderer with GPU fallback...',
-    })
-  } else if (!hasSandboxFallback) {
-    args.push(RENDERER_FALLBACK_FLAGS.sandbox)
-    recordFallbackIncident('no_sandbox_fallback_triggered', {
-      source,
-      reason,
-      serviceId: details?.serviceId || null,
-      targetUrl: details?.targetUrl || null,
-    })
-    updateFallbackStatus({
-      phase: 'relaunching',
-      stage: 'no-sandbox',
-      mitigated: false,
-      message: 'Entering safe mode (no-sandbox fallback)...',
-    })
-  } else {
-    recordFallbackIncident('fallback_exhausted', {
-      source,
-      reason,
-      serviceId: details?.serviceId || null,
-      targetUrl: details?.targetUrl || null,
-    })
-    updateFallbackStatus({
-      phase: 'exhausted',
-      stage: 'no-sandbox',
-      mitigated: false,
-      message: 'Renderer fallback exhausted. Manual action required.',
-    })
-    logger.error('RendererFallback', 'fallback_exhausted', getRuntimeDiagnostics({
-      source,
-      reason,
-      details,
-    }))
-    return false
-  }
+  const stableWithSandboxFallback = webglReady
+  const stableWithoutSandboxFallback = webglReady && compositingReady
 
-  rendererFallbackState.relaunchScheduled = true
-  logger.warn('RendererFallback', 'relaunch_scheduled', getRuntimeDiagnostics({
-    source,
-    reason,
-    details,
-    nextArgs: args,
-  }))
+  return gpuInfo.mode === 'hardware'
+    && !gpuInfo.eglRetryActive
+    && (gpuInfo.sandboxFallbackActive ? stableWithSandboxFallback : stableWithoutSandboxFallback)
+}
+
+function scheduleSafeGPUStartupProbe(delayMs = GPU_STARTUP_PROBE_DELAY_MS) {
+  const probeMs = Math.max(3000, Math.min(10000, Number(delayMs) || GPU_STARTUP_PROBE_DELAY_MS))
 
   setTimeout(() => {
     try {
-      app.relaunch({ args })
-      app.exit(0)
-    } catch (error) {
-      logger.error('RendererFallback', 'relaunch_failed', normalizeErrorPayload(error, source))
-      rendererFallbackState.relaunchScheduled = false
-    }
-  }, 500)
+      const gpuInfo = gpuManager.getGPUStatus()
+      const stable = isGPUStartupStable(gpuInfo)
+      const probeResult = gpuManager.markStartupProbeResult({
+        stable,
+        probeMs,
+        diagnostics: {
+          mode: gpuInfo.mode,
+          sandboxFallbackActive: gpuInfo.sandboxFallbackActive,
+          eglRetryActive: gpuInfo.eglRetryActive,
+        },
+      })
+      const status = probeResult?.status || gpuInfo
+      safeSendToMainWindow('gpu:status', status)
 
-  return true
+      if (stable) {
+        logger.info('Environment', 'gpu_startup_stable', {
+          probeMs,
+          mode: status.mode,
+          webgl: status.featureStatus?.webgl,
+          gpuCompositing: status.featureStatus?.gpu_compositing,
+          enableRasterizationOnNextLaunch: probeResult?.enableRasterizationOnNextLaunch,
+        })
+        return
+      }
+
+      logger.warn('Environment', 'gpu_startup_unstable', {
+        probeMs,
+        mode: status.mode,
+        webgl: status.featureStatus?.webgl,
+        gpuCompositing: status.featureStatus?.gpu_compositing,
+        sandboxFallbackActive: status.sandboxFallbackActive,
+        eglRetryActive: status.eglRetryActive,
+      })
+
+      if (status.mode === 'software') {
+        updateFallbackStatus({
+          phase: 'mitigated',
+          stage: 'gpu-software',
+          mitigated: true,
+          message: 'Safe visual mode active (software rendering).',
+          tier: getEffectiveGPUTier(status),
+        })
+      }
+    } catch (error) {
+      logger.warn('Environment', 'gpu_startup_probe_failed', {
+        message: error?.message || 'unknown_error',
+      })
+    }
+  }, probeMs)
 }
 
 function normalizeErrorPayload(err, origin) {
@@ -241,12 +402,41 @@ if (!app.requestSingleInstanceLock()) {
   process.exit(0)
 }
 
+const initialGPUStatus = gpuManager.initGPUManager({
+  app,
+  logger,
+  flags: {
+    fallbackFlag: RENDERER_FALLBACK_FLAGS.gpu,
+    safeModeFlag: '--melo-gpu-safe-mode',
+    swiftFlag: RENDERER_FALLBACK_FLAGS.swiftshader,
+    softwareFlag: RENDERER_FALLBACK_FLAGS.software,
+    sandboxFlag: RENDERER_FALLBACK_FLAGS.sandbox,
+    resetFlag: '--melo-gpu-reset',
+  },
+})
+logger.info('GPUManager', 'startup_status', initialGPUStatus)
+
 // Configuracion de Widevine para DRM.
 app.commandLine.appendSwitch('enable-features', 'WidevineCdm')
 app.commandLine.appendSwitch('disable-features', 'OutOfBlinkCors')
+app.commandLine.appendSwitch('enable-native-gpu-memory-buffers')
+const DEV_SERVER_FALLBACK_URL = 'http://localhost:5173'
+const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_RENDERER_URL || ''
+const NPM_LIFECYCLE_EVENT = String(process.env.npm_lifecycle_event || '')
+
+const devServerInsecureOrigin = (() => {
+  const fallbackOrigin = DEV_SERVER_FALLBACK_URL
+  const candidate = VITE_DEV_SERVER_URL
+  if (!candidate) return fallbackOrigin
+  try {
+    return new URL(candidate).origin
+  } catch (_) {
+    return fallbackOrigin
+  }
+})()
 app.commandLine.appendSwitch(
   'unsafely-treat-insecure-origin-as-secure',
-  'http://localhost:5173'
+  devServerInsecureOrigin
 )
 const verboseLoggingEnabled = DEBUG_MODE || process.env.MELO_VERBOSE_LOGGING === '1'
 if (verboseLoggingEnabled) {
@@ -255,35 +445,68 @@ if (verboseLoggingEnabled) {
 }
 
 
-const gpuFallbackActive = hasFlag(RENDERER_FALLBACK_FLAGS.gpu)
-  || process.env.MELO_GPU_FALLBACK === '1'
-  || process.env.MELO_LINUX_COMPAT_MODE === '1'
-const sandboxFallbackActive = hasFlag(RENDERER_FALLBACK_FLAGS.sandbox)
+const gpuTier = getEffectiveGPUTier(initialGPUStatus)
+const sandboxFallbackActive = Boolean(initialGPUStatus?.sandboxFallbackActive)
+  || hasFlag(RENDERER_FALLBACK_FLAGS.sandbox)
   || process.env.MELO_NO_SANDBOX_FALLBACK === '1'
+const isLinux = process.platform === 'linux'
 
-if (process.platform === 'linux') {
+const RENDERER_INDEX_PATH = path.join(app.getAppPath(), 'dist', 'renderer', 'index.html')
+
+function shouldUseDevServer() {
+  if (app.isPackaged) return false
+  if (VITE_DEV_SERVER_URL) return true
+  return /^dev(:|$)/.test(NPM_LIFECYCLE_EVENT)
+}
+
+function getRendererEntryPoint() {
+  if (shouldUseDevServer()) {
+    return {
+      kind: 'url',
+      target: VITE_DEV_SERVER_URL || DEV_SERVER_FALLBACK_URL,
+    }
+  }
+
+  return {
+    kind: 'file',
+    target: RENDERER_INDEX_PATH,
+  }
+}
+
+logger.info('Main', 'gpu_tier_startup', { tier: gpuTier })
+
+// GPU switches are applied by GPU Manager before this point.
+if (gpuTier === GPU_FALLBACK_TIERS.NATIVE_GPU) {
+  logger.info('Main', 'gpu_tier_applied', {
+    tier: 'native-gpu',
+    source: 'gpu-manager',
+  })
+} else if (gpuTier === GPU_FALLBACK_TIERS.SWIFTSHADER) {
+  logger.warn('Main', 'gpu_tier_applied', {
+    tier: 'swiftshader',
+    source: 'gpu-manager',
+  })
+} else if (gpuTier === GPU_FALLBACK_TIERS.SOFTWARE) {
+  logger.warn('Main', 'gpu_tier_applied', {
+    tier: 'software',
+    source: 'gpu-manager',
+  })
+}
+
+if (isLinux) {
   // Detectar Wayland y forzar XWayland por compatibilidad.
   const isWayland = process.env.WAYLAND_DISPLAY
     || process.env.XDG_SESSION_TYPE === 'wayland'
-  const linuxCompatMode = process.env.MELO_LINUX_COMPAT_MODE === '1'
   if (isWayland) {
     app.commandLine.appendSwitch('ozone-platform', 'x11')
     logger.info('Main', 'wayland_detected', { mode: 'x11' })
   }
 
-  if (sandboxFallbackActive || linuxCompatMode) {
-    app.commandLine.appendSwitch('no-sandbox')
-    app.commandLine.appendSwitch('disable-setuid-sandbox')
-  }
-  if (gpuFallbackActive) {
-    // Fallback controlado para hosts Linux con problemas de GPU/renderer.
-    app.commandLine.appendSwitch('disable-gpu')
-    app.commandLine.appendSwitch('disable-gpu-compositing')
-    logger.warn('Main', 'gpu_fallback_enabled', getRuntimeDiagnostics({
-      linuxCompatMode,
-      sandboxFallbackActive,
-    }))
-  }
+  // Sandbox fallback is applied exclusively by GPU Manager.
+  if (sandboxFallbackActive) logger.warn('Main', 'sandbox_fallback_enabled')
+
+  // Optimizations for Linux
+  app.commandLine.appendSwitch('disable-dev-shm-usage')
 }
 
 if (process.platform === 'darwin') {
@@ -291,9 +514,60 @@ if (process.platform === 'darwin') {
   app.commandLine.appendSwitch('enable-features', 'ScreenCaptureKitAudio')
 }
 
-if (gpuFallbackActive) {
-  app.disableHardwareAcceleration()
-}
+app.on('gpu-process-crashed', (_event, killed) => {
+  const currentTier = getEffectiveGPUTier()
+  logger.error('Main', 'gpu_process_crashed', { 
+    killed: Boolean(killed), 
+    currentTier,
+    exitCode: _event?.exitCode,
+  })
+  
+  triggerGPUTierFallback('gpu-process-crashed', {
+    killed: Boolean(killed),
+    exitCode: _event?.exitCode,
+  })
+})
+
+app.on('child-process-gone', (_event, details) => {
+  const processType = String(details?.type || '').toLowerCase()
+  if (processType !== 'gpu') return
+
+  const reason = String(details?.reason || 'unknown')
+  const exitCode = Number(details?.exitCode)
+  logger.error('Main', 'child_gpu_process_gone', {
+    reason,
+    exitCode,
+    serviceName: details?.serviceName || null,
+    name: details?.name || null,
+  })
+
+  if (exitCode === 1002 || reason === 'launch-failed' || reason === 'crashed') {
+    triggerGPUTierFallback('child-process-gone', {
+      reason,
+      exitCode,
+      serviceName: details?.serviceName || null,
+      name: details?.name || null,
+    })
+  }
+})
+
+app.on('render-process-gone', (_event, _webContents, details) => {
+  const reason = String(details?.reason || 'unknown')
+  const exitCode = Number(details?.exitCode)
+  logger.error('Main', 'app_render_process_gone', {
+    reason,
+    exitCode,
+    details: details || null,
+  })
+
+  if (exitCode === 1002 || reason === 'launch-failed') {
+    triggerGPUTierFallback('app-render-process-gone', {
+      reason,
+      exitCode,
+      details,
+    })
+  }
+})
 
 // Cargar flags adicionales por sistema operativo.
 try {
@@ -302,13 +576,16 @@ try {
     const flags = JSON.parse(fs.readFileSync(flagsFile, 'utf8'))
     const platformFlags = flags[process.platform] || []
     platformFlags.forEach((flag) => {
-      // Aceptar switches con valor para evitar flags mal parseados.
-      const normalized = String(flag || '').replace(/^--/, '')
-      const [key, ...rest] = normalized.split('=')
+      const clean = String(flag || '').replace(/^--/, '')
+      const [key, ...rest] = clean.split('=')
       const value = rest.length ? rest.join('=') : undefined
       if (!key) return
-      if (value === undefined) app.commandLine.appendSwitch(key)
-      else app.commandLine.appendSwitch(key, value)
+
+      if (value !== undefined && value !== '') {
+        app.commandLine.appendSwitch(key, value)
+      } else {
+        app.commandLine.appendSwitch(key)
+      }
     })
   }
 } catch (_) {}
@@ -349,8 +626,14 @@ let isCleaningUp = false
 let isExecutingScript = false
 let switchQueue = Promise.resolve()
 let pendingSwitchCount = 0
+let isSwitchingService = false
+let currentSwitchTarget = null
+let lastSwitchRequest = { serviceId: null, url: null, at: 0 }
+let switchLockTimer = null
 const loadAbortControllers = new Map()
+const loadStateByService = new Map()
 const crashedServices = new Set()
+const pendingViewDestroy = new WeakSet()
 const viewMetrics = {
   switches: 0,
   crashes: 0,
@@ -543,8 +826,7 @@ function logProcessMetrics(tag = 'metrics') {
 function startMetricsReporter(intervalMs = 5000) {
   if (metricsBroadcastTimer) clearInterval(metricsBroadcastTimer)
   metricsBroadcastTimer = setInterval(() => {
-    if (!mainWindow || mainWindow.isDestroyed()) return
-    mainWindow.webContents.send('metrics:update', getViewMetrics())
+    safeSendToMainWindow('metrics:update', getViewMetrics())
   }, intervalMs)
 }
 
@@ -640,26 +922,190 @@ function loadURLWithTimeout(webContents, url, abortSignal, timeoutMs = 10000) {
   })
 }
 
+async function safeLoadURL(view, url, abortSignal, timeoutMs = 10000) {
+  try {
+    await loadURLWithTimeout(view.webContents, url, abortSignal, timeoutMs)
+    return { ok: true }
+  } catch (error) {
+    const message = String(error?.message || 'load_failed')
+    logger.error('BrowserView', 'load_url_failed', {
+      serviceId: view?.__meloServiceId || 'unknown',
+      url,
+      message,
+    })
+
+    if (message.toLowerCase().includes('err_aborted') || message.toLowerCase().includes('load_cancelled')) {
+      return { ok: false, aborted: true, error: message }
+    }
+
+    return { ok: false, aborted: false, error: message }
+  }
+}
+
+function unlockSwitchLock(reason = 'completed') {
+  if (!isSwitchingService) return
+  if (switchLockTimer) {
+    clearTimeout(switchLockTimer)
+    switchLockTimer = null
+  }
+  logger.warn('BrowserView', 'switch_unlock', { reason, target: currentSwitchTarget })
+  isSwitchingService = false
+  currentSwitchTarget = null
+}
+
+function armSwitchLockTimeout(timeoutMs = 8000) {
+  if (switchLockTimer) clearTimeout(switchLockTimer)
+  switchLockTimer = setTimeout(() => {
+    if (isSwitchingService) {
+      logger.warn('BrowserView', 'switch_force_unlock_timeout', {
+        timeoutMs,
+        target: currentSwitchTarget,
+      })
+      unlockSwitchLock('timeout')
+    }
+  }, timeoutMs)
+}
+
+function getOrCreateLoadState(serviceId) {
+  if (!loadStateByService.has(serviceId)) {
+    loadStateByService.set(serviceId, {
+      isLoading: false,
+      retryCount: 0,
+      lastErrorAt: 0,
+    })
+  }
+  return loadStateByService.get(serviceId)
+}
+
+function isAbortNavigationError(error) {
+  const msg = String(error?.message || '').toLowerCase()
+  return msg.includes('load_cancelled') || msg.includes('err_aborted')
+}
+
+function isTransientSslError(error) {
+  const msg = String(error?.message || '').toLowerCase()
+  return msg.includes('ssl') || msg.includes('certificate') || msg.includes('cert_')
+}
+
+async function loadServiceURLWithGuard(
+  view,
+  serviceId,
+  url,
+  abortSignal,
+  {
+    timeoutMs = 10000,
+    maxRetries = 2,
+    retryDelayMs = 1000,
+  } = {}
+) {
+  const state = getOrCreateLoadState(serviceId)
+  if (state.isLoading) {
+    logger.warn('BrowserView', 'load_guard_blocked', { serviceId, url })
+    return { status: 'inflight' }
+  }
+
+  state.isLoading = true
+  state.retryCount = 0
+
+  try {
+    while (state.retryCount <= maxRetries) {
+      try {
+        console.log('LOADING URL', { serviceId, url, attempt: state.retryCount + 1 })
+        view.__meloServiceId = serviceId
+        const result = await safeLoadURL(view, url, abortSignal, timeoutMs)
+        if (!result.ok) {
+          if (result.aborted) return { status: 'aborted' }
+          throw new Error(result.error || 'load_failed')
+        }
+        state.retryCount = 0
+        return { status: 'ok' }
+      } catch (error) {
+        if (abortSignal?.aborted || isAbortNavigationError(error)) {
+          return { status: 'aborted' }
+        }
+
+        state.lastErrorAt = Date.now()
+        const transientSsl = isTransientSslError(error)
+        if (transientSsl && state.retryCount >= maxRetries) {
+          logger.warn('BrowserView', 'load_ssl_soft_fail', {
+            serviceId,
+            url,
+            attempts: state.retryCount + 1,
+            message: error?.message || 'ssl_error',
+          })
+          return { status: 'soft-failed' }
+        }
+
+        if (state.retryCount >= maxRetries) {
+          throw error
+        }
+
+        state.retryCount += 1
+        logger.warn('BrowserView', 'load_retry_scheduled', {
+          serviceId,
+          url,
+          retryCount: state.retryCount,
+          maxRetries,
+          retryDelayMs,
+          message: error?.message || 'load_failed',
+        })
+        await sleep(retryDelayMs)
+      }
+    }
+
+    return { status: 'soft-failed' }
+  } finally {
+    state.isLoading = false
+  }
+}
+
+function areBoundsEqual(a, b) {
+  return a && b
+    && a.x === b.x
+    && a.y === b.y
+    && a.width === b.width
+    && a.height === b.height
+}
+
+function safeSetBounds(view, bounds) {
+  if (!view || !bounds) return
+  const current = view.getBounds()
+  if (areBoundsEqual(current, bounds)) return
+  view.setBounds(bounds)
+}
+
 function setupViewLifecycleHandlers(view, serviceId, url) {
+  attachShortcutForwarding(view.webContents, `browserview:${serviceId}`)
+
   view.webContents.on('crashed', () => {
     handleViewCrash(serviceId, url, 'crashed').catch(() => {})
   })
 
   view.webContents.on('render-process-gone', (_event, details) => {
+    const reason = details?.reason || 'unknown'
+    const exitCode = Number(details?.exitCode)
     const diagnostics = {
       serviceId,
       targetUrl: url,
       currentUrl: view.webContents.getURL(),
       processId: view.webContents.getOSProcessId?.() || null,
-      reason: details?.reason || 'unknown',
-      exitCode: details?.exitCode,
+      reason,
+      exitCode,
       metadata: details || null,
     }
-    if (diagnostics.reason === 'launch-failed') {
+
+    if (exitCode === 1002) {
+      triggerGPUTierFallback('browserview', {
+        ...diagnostics,
+      })
+      logger.error('BrowserView', 'gpu_init_failed_1002', diagnostics)
+      return
+    }
+
+    if (reason === 'launch-failed') {
       recordFallbackIncident('launch_failure', diagnostics)
     }
     logger.error('BrowserView', 'render_process_gone', diagnostics)
-    scheduleRendererFallbackRelaunch('browserview', diagnostics)
     handleViewCrash(serviceId, url, 'render-process-gone').catch(() => {})
   })
 
@@ -669,6 +1115,30 @@ function setupViewLifecycleHandlers(view, serviceId, url) {
 
   view.webContents.removeAllListeners('did-fail-load')
   view.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
+    console.error('LOAD FAILED', { serviceId, errorCode, errorDescription })
+
+    // ERR_ABORTED (-3) es esperable al cancelar cargas por switch rapido.
+    if (Number(errorCode) === -3) {
+      logger.warn('BrowserView', 'did_fail_load_aborted', { serviceId, errorCode, errorDescription })
+      if (currentSwitchTarget === serviceId) {
+        unlockSwitchLock(`did-fail-load:${errorCode}`)
+      }
+      return
+    }
+
+    // SSL transitorio: no activar loop de recuperacion inmediata.
+    if (String(errorDescription || '').toLowerCase().includes('ssl')) {
+      logger.warn('BrowserView', 'did_fail_load_ssl_transient', {
+        serviceId,
+        errorCode,
+        errorDescription,
+      })
+      if (currentSwitchTarget === serviceId) {
+        unlockSwitchLock(`did-fail-load:${errorCode}`)
+      }
+      return
+    }
+
     playerController.setState(PLAYER_STATE.ERROR, `did-fail-load ${serviceId}`)
     viewMetrics.loadFailures += 1
     logger.error('BrowserView', 'did_fail_load', {
@@ -676,7 +1146,22 @@ function setupViewLifecycleHandlers(view, serviceId, url) {
       errorCode,
       errorDescription,
     })
+
+    if (currentSwitchTarget === serviceId) {
+      unlockSwitchLock(`did-fail-load:${errorCode}`)
+    }
   })
+
+  view.webContents.removeAllListeners('did-finish-load')
+  view.webContents.on('did-finish-load', () => {
+    if (currentSwitchTarget === serviceId) {
+      unlockSwitchLock('did-finish-load')
+    }
+  })
+}
+
+function destroyBrowserViewWhenSafe(view, serviceId = 'unknown') {
+  destroyBrowserViewInstance(view, serviceId)
 }
 
 async function handleViewCrash(serviceId, url, reason) {
@@ -699,7 +1184,7 @@ async function handleViewCrash(serviceId, url, reason) {
     await sleep(1000)
 
     if (playerController.activeServiceId === serviceId) {
-      await enqueueServiceSwitch(serviceId, url, SERVICES[serviceId])
+      await enqueueServiceSwitch(serviceId, url, SERVICES[serviceId], { force: true })
       viewMetrics.recoveries += 1
       logger.info('BrowserView', 'recovery_success', { serviceId })
     } else {
@@ -1037,9 +1522,41 @@ function sanitizeErrorPayload(payload) {
   }
 }
 
-function destroyBrowserViewInstance(view, serviceId = 'unknown') {
+function destroyBrowserViewInstance(view, serviceId = 'unknown', options = {}) {
+  const deferWhileLoading = options.deferWhileLoading !== false
   if (!view) return
+  const webContents = view.webContents
+  const isLoading = Boolean(webContents && !webContents.isDestroyed() && webContents.isLoading())
+  console.log('Destroy attempt', { serviceId, isLoading })
+
+  if (deferWhileLoading && isLoading) {
+    if (pendingViewDestroy.has(view)) {
+      console.warn('Skipping destroy: still loading')
+      return
+    }
+
+    pendingViewDestroy.add(view)
+    logger.warn('BrowserView', 'destroy_deferred_loading', { serviceId })
+    console.warn('Skipping destroy: still loading')
+
+    let finalized = false
+    const finalize = () => {
+      if (finalized) return
+      finalized = true
+      pendingViewDestroy.delete(view)
+      destroyBrowserViewInstance(view, serviceId, { deferWhileLoading: false })
+    }
+
+    try {
+      webContents.once('did-finish-load', finalize)
+      webContents.once('did-fail-load', finalize)
+    } catch (_) {}
+    setTimeout(finalize, 8000)
+    return
+  }
+
   if (serviceId) cancelPendingLoad(serviceId)
+  if (serviceId) loadStateByService.delete(serviceId)
 
   try {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1048,11 +1565,14 @@ function destroyBrowserViewInstance(view, serviceId = 'unknown') {
   } catch (_) {}
 
   try {
-    if (view.webContents && !view.webContents.isDestroyed()) {
-      view.webContents.removeAllListeners()
-      view.webContents.destroy()
+    if (webContents && !webContents.isDestroyed()) {
+      try { webContents.stop() } catch (_) {}
+      webContents.removeAllListeners()
+      webContents.destroy()
     }
-  } catch (_) {}
+  } catch (error) {
+    console.warn('Destroy failed safely', error)
+  }
 
   if (serviceId && views[serviceId] === view) {
     delete views[serviceId]
@@ -1080,6 +1600,7 @@ async function cleanupAllResources() {
     try { controller.abort() } catch (_) {}
   }
   loadAbortControllers.clear()
+  loadStateByService.clear()
   crashedServices.clear()
   pendingSwitchCount = 0
   switchQueue = Promise.resolve()
@@ -1188,7 +1709,7 @@ function applyViewBounds() {
   if (!activeView || !activeView.webContents) return
   if (activeView.webContents.isDestroyed()) return
 
-  activeView.setBounds(getContentBounds())
+  safeSetBounds(activeView, getContentBounds())
   activeView.setAutoResize({ width: true, height: true })
 }
 
@@ -1204,13 +1725,14 @@ function createMainWindow() {
     frame: false,
     autoHideMenuBar: true,
     titleBarStyle: 'hidden',
-    backgroundColor: '#0d0d0d',
+    transparent: false,
+    backgroundColor: '#000000',
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: !sandboxFallbackActive,
       backgroundThrottling: true,
       webSecurity: true,
     },
@@ -1230,13 +1752,17 @@ function createMainWindow() {
 
   mainWindow.setMenuBarVisibility(false)
 
-  if (app.isPackaged) {
-    mainWindow.loadFile(
-      path.join(__dirname, 'dist/renderer/index.html')
-    )
-  } else {
-    mainWindow.loadURL('http://localhost:5173')
+  const rendererEntryPoint = getRendererEntryPoint()
+  if (rendererEntryPoint.kind === 'url') {
+    mainWindow.loadURL(rendererEntryPoint.target)
     mainWindow.webContents.openDevTools({ mode: 'detach' })
+  } else {
+    mainWindow.loadFile(rendererEntryPoint.target).catch((error) => {
+      logger.error('MainWindow', 'load_file_failed', {
+        filePath: rendererEntryPoint.target,
+        message: error?.message || String(error),
+      })
+    })
   }
 
   mainWindow.webContents.once('did-finish-load', () => {
@@ -1259,42 +1785,69 @@ function createMainWindow() {
         message: 'Renderer recovered successfully.',
       })
     }
+
+    safeSendToMainWindow('gpu:status', gpuManager.getGPUStatus())
   })
+
+  attachShortcutForwarding(mainWindow.webContents, 'renderer')
 
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
     logger.error('MainWindow', 'did_fail_load', { errorCode, errorDescription, validatedURL })
-    if (app.isPackaged) {
+    if (!shouldUseDevServer()) {
       setTimeout(() => {
         if (!mainWindow || mainWindow.isDestroyed()) return
-        mainWindow.loadFile(path.join(__dirname, 'dist/renderer/index.html')).catch(() => {})
+        mainWindow.loadFile(RENDERER_INDEX_PATH).catch((error) => {
+          logger.error('MainWindow', 'load_file_retry_failed', {
+            filePath: RENDERER_INDEX_PATH,
+            message: error?.message || String(error),
+          })
+        })
       }, 1000)
     }
   })
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    const exitCode = Number(details?.exitCode)
+    const reason = details?.reason || 'unknown'
     const diagnostics = getRuntimeDiagnostics({
-      reason: details?.reason || 'unknown',
-      exitCode: details?.exitCode,
+      reason,
+      exitCode,
       metadata: details || null,
     })
-    if ((details?.reason || 'unknown') === 'launch-failed') {
+
+    if (exitCode === 1002) {
+      triggerGPUTierFallback('main-window', {
+        ...diagnostics,
+      })
+      logger.error('MainWindow', 'gpu_init_failed_1002', diagnostics)
+      return
+    }
+
+    if (reason === 'launch-failed') {
       recordFallbackIncident('launch_failure', diagnostics)
     }
     logger.error('MainWindow', 'render_process_gone', diagnostics)
-    scheduleRendererFallbackRelaunch('main-window', diagnostics)
   })
 
   mainWindow.on('resize', applyViewBounds)
 
   mainWindow.on('blur', () => {
     if (activeView?.webContents && !activeView.webContents.isDestroyed()) {
-      activeView.webContents.send('melo:polling-mode', 'background')
+      try {
+        if (canSendToWebContents(activeView.webContents)) {
+          activeView.webContents.send('melo:polling-mode', 'background')
+        }
+      } catch (_) {}
     }
   })
 
   mainWindow.on('focus', () => {
     if (activeView?.webContents && !activeView.webContents.isDestroyed()) {
-      activeView.webContents.send('melo:polling-mode', 'foreground')
+      try {
+        if (canSendToWebContents(activeView.webContents)) {
+          activeView.webContents.send('melo:polling-mode', 'foreground')
+        }
+      } catch (_) {}
     }
   })
 
@@ -1465,6 +2018,48 @@ function checkConnection() {
   return isOnline
 }
 
+function appendPlayEntry(entry) {
+  if (!entry || !entry.title) return
+  const plays = history.get('plays', [])
+  plays.unshift(entry)
+  if (plays.length > 5000) plays.splice(5000)
+  history.set('plays', plays)
+}
+
+function buildCurrentTrackEntry(at = Date.now()) {
+  if (!currentTrackData || !currentTrackStart || !currentTrackData.title) return null
+  const listenedMs = Math.max(0, Number(at) - Number(currentTrackStart))
+  if (listenedMs <= 10000) return null
+
+  return {
+    id: Number(at),
+    title: currentTrackData.title,
+    artist: currentTrackData.artist || null,
+    album: currentTrackData.album || null,
+    artwork: currentTrackData.artwork || null,
+    service: currentTrackData.serviceId,
+    playedAt: currentTrackStart,
+    listenedMs,
+  }
+}
+
+function getPlaysSnapshot(includeCurrent = true, at = Date.now()) {
+  const plays = history.get('plays', [])
+  if (!includeCurrent) return plays
+
+  const currentEntry = buildCurrentTrackEntry(at)
+  if (!currentEntry) return plays
+
+  return [currentEntry, ...plays]
+}
+
+function persistCurrentTrackAt(at = Date.now()) {
+  const entry = buildCurrentTrackEntry(at)
+  if (!entry) return false
+  appendPlayEntry(entry)
+  return true
+}
+
 // Registrar una reproduccion unica por cambio de track.
 function trackPlay(data, serviceId) {
   if (!data?.title) return
@@ -1473,23 +2068,7 @@ function trackPlay(data, serviceId) {
   if (currentTrackData && currentTrackStart) {
     const previousTrackId = `${currentTrackData.title || ''}-${currentTrackData.artist || ''}`
     if (trackId !== previousTrackId) {
-      const listenedMs = Date.now() - currentTrackStart
-      if (listenedMs > 10000) {
-        const plays = history.get('plays', [])
-        const entry = {
-          id: Date.now(),
-          title: currentTrackData.title,
-          artist: currentTrackData.artist || null,
-          album: currentTrackData.album || null,
-          artwork: currentTrackData.artwork || null,
-          service: currentTrackData.serviceId,
-          playedAt: currentTrackStart,
-          listenedMs,
-        }
-        plays.unshift(entry)
-        if (plays.length > 5000) plays.splice(5000)
-        history.set('plays', plays)
-      }
+      persistCurrentTrackAt(Date.now())
     } else {
       return
     }
@@ -1607,12 +2186,18 @@ function createMiniPlayer() {
     .getPrimaryDisplay().workAreaSize
   miniWindow.setPosition(width - 360, height - 108)
 
-  if (app.isPackaged) {
-    miniWindow.loadFile(path.join(__dirname, 'dist/renderer/index.html'), {
-      hash: 'mini'
-    })
+  const rendererEntryPoint = getRendererEntryPoint()
+  if (rendererEntryPoint.kind === 'url') {
+    miniWindow.loadURL(`${rendererEntryPoint.target.replace(/\/$/, '')}/#mini`)
   } else {
-    miniWindow.loadURL('http://localhost:5173/#mini')
+    miniWindow.loadFile(rendererEntryPoint.target, {
+      hash: 'mini'
+    }).catch((error) => {
+      logger.error('MiniWindow', 'load_file_failed', {
+        filePath: rendererEntryPoint.target,
+        message: error?.message || String(error),
+      })
+    })
   }
 
   miniWindow.on('closed', () => {
@@ -1634,12 +2219,12 @@ async function createServiceView(serviceId, url) {
   if (existing && existing.webContents && !existing.webContents.isDestroyed()) {
     const currentUrl = existing.webContents.getURL()
     if (currentUrl === url) return existing
-    destroyBrowserViewInstance(existing, serviceId)
+    destroyBrowserViewWhenSafe(existing, serviceId)
   }
 
   Object.entries(views).forEach(([id, view]) => {
     if (id !== serviceId) {
-      destroyBrowserViewInstance(view, id)
+      destroyBrowserViewWhenSafe(view, id)
     }
   })
 
@@ -1651,14 +2236,14 @@ async function createServiceView(serviceId, url) {
       partition: `persist:melo-${serviceId}`,
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: !sandboxFallbackActive,
       backgroundThrottling: true,
       plugins: true,
       allowRunningInsecureContent: false,
     },
   })
 
-  view.setBackgroundColor('#0d0d0d')
+  view.setBackgroundColor('#000000')
 
   // UA Safari para maximizar compatibilidad DRM con Apple Music.
   view.webContents.setUserAgent(
@@ -1677,10 +2262,43 @@ async function createServiceView(serviceId, url) {
   view.webContents.on('did-finish-load', () => {
     playerController.setState(PLAYER_STATE.READY, `did-finish-load ${serviceId}`)
     applyVolumeToWebContents(view.webContents, currentVolumeLevel).catch(() => {})
-    view.webContents.send(
-      'melo:polling-mode',
-      mainWindow?.isFocused() ? 'foreground' : 'background'
-    )
+
+    if (serviceId === 'appleMusic') {
+      view.webContents.insertCSS(
+        'html, body, #root { background-color: #0b0b0d !important; }'
+      ).catch(() => {})
+
+      // Lightweight Apple Music optimization: avoid persistent compositor hints and
+      // smooth-scroll repaints without forcing visual filters/blur overrides.
+      view.webContents.executeJavaScript(`
+        (() => {
+          try {
+            if (document.documentElement) {
+              document.documentElement.style.willChange = 'auto'
+              document.documentElement.style.scrollBehavior = 'auto'
+            }
+            if (document.body) {
+              document.body.style.willChange = 'auto'
+              document.body.style.scrollBehavior = 'auto'
+            }
+            return true
+          } catch (_) {
+            return false
+          }
+        })()
+      `, true).catch(() => {})
+    }
+
+    // Keep Apple Music rendering untouched to avoid gray/washed UI artifacts.
+
+    try {
+      if (canSendToWebContents(view.webContents)) {
+        view.webContents.send(
+          'melo:polling-mode',
+          mainWindow?.isFocused() ? 'foreground' : 'background'
+        )
+      }
+    } catch (_) {}
   })
 
   view.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
@@ -1728,7 +2346,26 @@ async function createServiceView(serviceId, url) {
   const loadController = createLoadController(serviceId)
   try {
     if (view.webContents.getURL() !== url) {
-      await loadURLWithTimeout(view.webContents, url, loadController.signal, 10000)
+      const loadResult = await loadServiceURLWithGuard(
+        view,
+        serviceId,
+        url,
+        loadController.signal,
+        {
+          timeoutMs: 10000,
+          maxRetries: 2,
+          retryDelayMs: 1000,
+        }
+      )
+
+      if (loadResult?.status === 'aborted' || loadResult?.status === 'inflight') {
+        throw new Error('load_cancelled')
+      }
+
+      if (loadResult?.status === 'soft-failed') {
+        playerController.setState(PLAYER_STATE.ERROR, `soft-load-failed ${serviceId}`)
+        logger.warn('BrowserView', 'soft_load_failed', { serviceId, url })
+      }
     }
   } catch (error) {
     if (error?.message === 'load_cancelled') {
@@ -1779,7 +2416,27 @@ function applyVolumeToWebContents(webContents, volume) {
   `, { requireReady: false, retries: 1, label: 'set-volume' }).catch(() => false)
 }
 
-function enqueueServiceSwitch(serviceId, url, serviceData) {
+function enqueueServiceSwitch(serviceId, url, serviceData, options = {}) {
+  const now = Date.now()
+  const force = options.force === true
+  const recentDuplicate =
+    lastSwitchRequest.serviceId === serviceId
+    && lastSwitchRequest.url === url
+    && (now - lastSwitchRequest.at) < 1200
+
+  // Evitar duplicados rapidos que generan load abort loops en BrowserView.
+  if (!force && recentDuplicate) {
+    logger.warn('BrowserView', 'switch_deduped_recent', { serviceId, url })
+    return switchQueue
+  }
+
+  // Guard de inflight: no re-encolar el mismo destino mientras ya se esta cambiando.
+  if (!force && isSwitchingService && currentSwitchTarget === serviceId) {
+    logger.warn('BrowserView', 'switch_deduped_inflight', { serviceId, url })
+    return switchQueue
+  }
+
+  lastSwitchRequest = { serviceId, url, at: now }
   pendingSwitchCount += 1
   switchQueue = switchQueue
     .then(() => switchToService(serviceId, url, serviceData))
@@ -1797,17 +2454,45 @@ function enqueueServiceSwitch(serviceId, url, serviceData) {
 
 async function switchToService(serviceId, url, serviceData) {
   return measureIfDebug('switch_service', async () => {
-    const switchStartedAt = Date.now()
+    if (isSwitchingService) {
+      logger.warn('BrowserView', 'switch_blocked_already_switching', {
+        requested: serviceId,
+        inFlight: currentSwitchTarget,
+      })
+      return
+    }
+
     if (!mainWindow || mainWindow.isDestroyed()) return
     if (activeView && activeView === views[serviceId] && playerController.state === PLAYER_STATE.READY) {
       return
     }
+
+    isSwitchingService = true
+    currentSwitchTarget = serviceId
+    armSwitchLockTimeout(8000)
+    const switchStartedAt = Date.now()
 
     const previousServiceId = playerController.activeServiceId
     playerController.activeServiceId = serviceId
     playerController.setState(PLAYER_STATE.LOADING, `switch ${serviceId}`)
 
     if (activeView) {
+      try {
+        if (!activeView.webContents.isDestroyed() && activeView.webContents.isLoading()) {
+          await new Promise((resolve) => {
+            let done = false
+            const finish = () => {
+              if (done) return
+              done = true
+              resolve()
+            }
+            activeView.webContents.once('did-finish-load', finish)
+            activeView.webContents.once('did-fail-load', finish)
+            setTimeout(finish, 8000)
+          })
+        }
+      } catch (_) {}
+
       try {
         if (!activeView.webContents.isDestroyed()) {
           activeView.webContents.setAudioMuted(true)
@@ -1816,7 +2501,7 @@ async function switchToService(serviceId, url, serviceData) {
 
       try { mainWindow.removeBrowserView(activeView) } catch (_) {}
       if (previousServiceId && previousServiceId !== serviceId) {
-        destroyBrowserViewInstance(activeView, previousServiceId)
+        destroyBrowserViewWhenSafe(activeView, previousServiceId)
       }
     }
 
@@ -1850,7 +2535,7 @@ async function switchToService(serviceId, url, serviceData) {
     })
     setTimeout(applyViewBounds, 50)
 
-    mainWindow.webContents.send('service:active', {
+    safeSendToMainWindow('service:active', {
       serviceId,
       color: serviceData?.color || '#fc3c44',
       name: serviceData?.name || serviceId,
@@ -2067,6 +2752,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('debug:metrics', () => getViewMetrics())
   ipcMain.handle('fallback:status', () => ({ ...fallbackStatus }))
+  ipcMain.handle('gpu:info', () => gpuManager.getGPUStatus())
   ipcMain.handle('fallback:retry-manual', async () => {
     updateFallbackStatus({
       phase: 'manual_retry',
@@ -2090,11 +2776,13 @@ function registerIpcHandlers() {
       message: 'Restarting app in safe mode...',
       mitigated: false,
     })
-    const args = process.argv.slice(1)
-    if (!args.includes(RENDERER_FALLBACK_FLAGS.gpu)) args.push(RENDERER_FALLBACK_FLAGS.gpu)
-    if (!args.includes(RENDERER_FALLBACK_FLAGS.sandbox)) args.push(RENDERER_FALLBACK_FLAGS.sandbox)
-    app.relaunch({ args })
-    app.exit(0)
+    gpuManager.relaunchWithFallback({
+      useFallback: true,
+      safeMode: true,
+      useSandboxFallback: true,
+      source: 'ipc:fallback-safe-mode',
+      reason: 'manual-safe-mode',
+    })
     return { success: true }
   })
 
@@ -2172,14 +2860,14 @@ function registerIpcHandlers() {
 
       if (shouldUpdate) {
         _lastProgressUpdate = now
-        mainWindow.webContents.send('media:update', {
+        safeSendToMainWindow('media:update', {
           serviceId: nextServiceId,
           ...nextData,
           isPlaying: playbackState.state.isPlaying,
         })
 
         if (miniWindow && !miniWindow.isDestroyed()) {
-          miniWindow.webContents.send('media:update', {
+          safeSendToWindow(miniWindow, 'media:update', {
             serviceId: nextServiceId,
             ...nextData,
             isPlaying: playbackState.state.isPlaying,
@@ -2236,12 +2924,12 @@ function registerIpcHandlers() {
   ipcMain.handle('stats:getHistory', (_e, payload = {}) => {
     const { limit = 100, offset = 0 } = payload || {}
     if (!isFiniteNumber(limit) || !isFiniteNumber(offset)) return []
-    const plays = history.get('plays', [])
+    const plays = getPlaysSnapshot(true)
     return plays.slice(Number(offset), Number(offset) + Number(limit))
   })
 
   ipcMain.handle('stats:getSummary', () => {
-    const plays = history.get('plays', [])
+    const plays = getPlaysSnapshot(true)
     return buildSummary(plays)
   })
 
@@ -2267,7 +2955,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('stats:getWrapped', (_e, payload = {}) => {
     const { from, to } = payload || {}
-    const plays = history.get('plays', [])
+    const plays = getPlaysSnapshot(true)
     const filtered = plays.filter((p) => {
       if (from && p.playedAt < from) return false
       if (to && p.playedAt > to) return false
@@ -2282,7 +2970,7 @@ function registerIpcHandlers() {
   })
 
   ipcMain.handle('stats:export', () => {
-    const plays = history.get('plays', [])
+    const plays = getPlaysSnapshot(true)
     return JSON.stringify(plays, null, 2)
   })
 
@@ -2494,8 +3182,19 @@ function registerIpcHandlers() {
     if (!payload || typeof payload !== 'object') return false
     const { title, body, silent } = payload
     if (!isNonEmptyString(title)) return false
-    new Notification({ title, body, silent: silent ?? true }).show()
-    return true
+    try {
+      if (typeof Notification.isSupported === 'function' && !Notification.isSupported()) {
+        logger.warn('Notification', 'unsupported')
+        return false
+      }
+      new Notification({ title, body, silent: silent ?? true }).show()
+      return true
+    } catch (error) {
+      logger.error('Notification', 'show_failed', {
+        message: error?.message || 'unknown_error',
+      })
+      return false
+    }
   })
 
 }
@@ -2510,6 +3209,32 @@ function registerGlobalShortcuts() {
   } catch (error) {
     logger.warn('Shortcuts', '[settings] register_shortcut_failed', {
       accelerator: 'CommandOrControl+Shift+M',
+      message: error?.message || 'unknown_error',
+    })
+  }
+
+  try {
+    if (!globalShortcut.isRegistered('Escape')) {
+      globalShortcut.register('Escape', () => {
+        emitForwardedShortcut('escape', 'globalShortcut')
+      })
+    }
+  } catch (error) {
+    logger.warn('Shortcuts', '[settings] register_shortcut_failed', {
+      accelerator: 'Escape',
+      message: error?.message || 'unknown_error',
+    })
+  }
+
+  try {
+    if (!globalShortcut.isRegistered('CommandOrControl+K')) {
+      globalShortcut.register('CommandOrControl+K', () => {
+        emitForwardedShortcut('cmdk', 'globalShortcut')
+      })
+    }
+  } catch (error) {
+    logger.warn('Shortcuts', '[settings] register_shortcut_failed', {
+      accelerator: 'CommandOrControl+K',
       message: error?.message || 'unknown_error',
     })
   }
@@ -2590,9 +3315,10 @@ app.whenReady().then(async () => {
   }
 
   if (process.platform !== 'linux') {
-    dialog.showErrorBox('Melo', 'This build is currently supported only on Linux.')
-    app.quit()
-    return
+    logger.warn('Main', 'non_linux_runtime_detected', {
+      platform: process.platform,
+      note: 'Running in portable mode with best-effort GPU configuration.',
+    })
   }
 
   const isAutostartLaunch = process.argv.includes('--autostart')
@@ -2600,8 +3326,35 @@ app.whenReady().then(async () => {
   launchStartsMinimized = isAutostartLaunch && startMinimized
 
   logger.info('Environment', 'runtime_diagnostics', getRuntimeDiagnostics())
+  
+  // GPU diagnostics via GPU Manager
   try {
-    logger.info('Environment', 'gpu_status', app.getGPUFeatureStatus())
+    const gpuInfo = gpuManager.getGPUStatus()
+    const gpuHealth = gpuManager.getGPUHealthMetrics()
+    const gpuStatus = gpuInfo.featureStatus || {}
+    logger.info('Environment', 'gpu_status', {
+      ...gpuStatus,
+      profile: gpuInfo.profile || null,
+      mode: gpuInfo.mode,
+      activeFlags: gpuInfo.activeFlags || [],
+      fallbackActive: gpuInfo.fallbackActive,
+      safeModeLocked: gpuInfo.safeModeLocked,
+      safeModeReason: gpuInfo.safeModeReason || null,
+      sandboxFallbackActive: gpuInfo.sandboxFallbackActive,
+      sandboxStatus: gpuInfo.environment?.sandbox || null,
+      gpuVendor: gpuInfo.environment?.gpuVendor || 'unknown',
+      sessionType: gpuInfo.environment?.sessionType || 'unknown',
+      timestamp: new Date().toISOString(),
+    })
+    logger.info('Environment', 'gpu_health', gpuHealth)
+    safeSendToMainWindow('gpu:status', gpuInfo)
+
+    logger.info('Environment', 'gpu_startup_probe_scheduled', {
+      probeMs: Math.max(3000, Math.min(10000, GPU_STARTUP_PROBE_DELAY_MS)),
+      mode: gpuInfo.mode,
+      tier: getEffectiveGPUTier(gpuInfo),
+    })
+    scheduleSafeGPUStartupProbe(GPU_STARTUP_PROBE_DELAY_MS)
   } catch (_) {}
 
   // Inicializar caché de artworks para MPRIS y notificaciones
@@ -2709,17 +3462,15 @@ app.whenReady().then(async () => {
   healthMonitor.recordAdapterAction()
   healthMonitor.initialize(5000)
   healthMonitor.subscribe((status) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('health:status', status)
-    }
+    safeSendToMainWindow('health:status', status)
   })
 
   checkConnection()
   networkStatusTimer = setInterval(() => {
     const wasOnline = isOnline
     const nowOnline = checkConnection()
-    if (wasOnline !== nowOnline && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('network:status', { online: nowOnline })
+    if (wasOnline !== nowOnline) {
+      safeSendToMainWindow('network:status', { online: nowOnline })
     }
   }, 5000)
 
@@ -2780,6 +3531,7 @@ app.on('second-instance', () => {
 
 app.on('before-quit', async () => {
   isQuitting = true
+  persistCurrentTrackAt(Date.now())
   // Esperar limpieza completa para evitar procesos huerfanos.
   await cleanupAllResources()
 })

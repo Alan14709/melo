@@ -16,7 +16,7 @@ const ICONS = {
   radio: Radio,
 }
 
-export default function ServiceCard({ service, onClick, delayMs = 0, isConnected }) {
+export default function ServiceCard({ service, onClick, delayMs = 0, isConnected, className = '', style = {} }) {
   const connectedServices = usePlayerStore((s) => s.connectedServices)
   const Icon = ICONS[service.icon] || Music
   const connected = typeof isConnected === 'boolean'
@@ -25,9 +25,9 @@ export default function ServiceCard({ service, onClick, delayMs = 0, isConnected
 
   return (
     <button
-      className="service-card no-drag"
+      className={`service-card no-drag ${className}`.trim()}
       onClick={onClick}
-      style={{ '--service-color': service.color, animationDelay: `${delayMs}ms` }}
+      style={{ '--service-color': service.color, animationDelay: `${delayMs}ms`, ...style }}
     >
       <Icon size={40} color={service.color} />
       <p>{service.name}</p>

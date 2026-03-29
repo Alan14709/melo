@@ -1,15 +1,18 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { SERVICES } from '../../../services/registry'
 import { version } from '../../../package.json'
 import { usePlayerStore } from '../store/usePlayerStore'
+import { useToast } from '../hooks/useToast'
+import { logger } from '../utils/logger'
 import SettingsRow from './SettingsRow.jsx'
 import ThemeEditor from './ThemeEditor.jsx'
 import { applyTheme } from '../utils/applyTheme'
 
-const THEMES = ['dark', 'oled', 'light', 'nord', 'catppuccin', 'custom']
+const THEMES = ['dark', 'oled', 'light', 'nord', 'catppuccin', 'liquid-glass', 'custom']
 
 export default function SettingsPanel({ isOpen, onClose }) {
+  const { error: showError, success: showSuccess, info: showInfo } = useToast()
   const {
     notificationsEnabled,
     setNotifications,
@@ -56,36 +59,55 @@ export default function SettingsPanel({ isOpen, onClose }) {
   const [closeBehavior, setCloseBehavior] = useState('tray')
   const [autostartEnabled, setAutostartEnabled] = useState(false)
   const [startMinimized, setStartMinimized] = useState(true)
+  const [pendingClearConfirm, setPendingClearConfirm] = useState(false)
+  const clearConfirmTimerRef = useRef(null)
+
+  useEffect(() => {
+    return () => {
+      clearTimeout(clearConfirmTimerRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     if (!isOpen) return
 
-    window.melo.getSettings().then((settings) => {
-      const safe = settings || {}
-      const nextTrayEnabled = safe.trayEnabled ?? true
-      const nextCloseBehaviorRaw = safe.closeBehavior ?? 'tray'
-      const nextCloseBehavior = nextCloseBehaviorRaw === 'quit' ? 'quit' : 'tray'
+    window.melo.getSettings()
+      .then((settings) => {
+        const safe = settings || {}
+        const nextTrayEnabled = safe.trayEnabled ?? true
+        const nextCloseBehaviorRaw = safe.closeBehavior ?? 'tray'
+        const nextCloseBehavior = nextCloseBehaviorRaw === 'quit' ? 'quit' : 'tray'
 
-      setTrayEnabled(Boolean(nextTrayEnabled))
-      setCloseBehavior(nextTrayEnabled ? nextCloseBehavior : 'quit')
-      setAutostartEnabled(Boolean(safe.autostartEnabled ?? false))
-      setStartMinimized(Boolean(safe.startMinimized ?? true))
-    }).catch(() => {
-      // Defaults seguros para no romper UI si falla IPC.
-      setTrayEnabled(true)
-      setCloseBehavior('tray')
-      setAutostartEnabled(false)
-      setStartMinimized(true)
-    })
-  }, [isOpen])
+        setTrayEnabled(Boolean(nextTrayEnabled))
+        setCloseBehavior(nextTrayEnabled ? nextCloseBehavior : 'quit')
+        setAutostartEnabled(Boolean(safe.autostartEnabled ?? false))
+        setStartMinimized(Boolean(safe.startMinimized ?? true))
+        logger.info('Configuración de bandeja cargada')
+      })
+      .catch((err) => {
+        // Phase 1: Error handling mejorado
+        logger.error('No pude cargar configuración de bandeja', err)
+        showError('Error al cargar ajustes avanzados. Usando valores por defecto.')
+        // Defaults seguros
+        setTrayEnabled(true)
+        setCloseBehavior('tray')
+        setAutostartEnabled(false)
+        setStartMinimized(true)
+      })
+  }, [isOpen, showError])
 
   useEffect(() => {
     if (!isOpen) return
-    window.melo.discordStatus().then((status) => {
-      setDiscordConnected(Boolean(status))
-    }).catch(() => {
-      setDiscordConnected(false)
-    })
+    window.melo.discordStatus()
+      .then((status) => {
+        setDiscordConnected(Boolean(status))
+        logger.debug('Discord status checked', { connected: Boolean(status) })
+      })
+      .catch((err) => {
+        // Operación opcional - no mostrar toast, solo log
+        logger.warn('No pude verificar estado de Discord', err)
+        setDiscordConnected(false)
+      })
   }, [isOpen])
 
   const handleExport = () => {
@@ -100,106 +122,244 @@ export default function SettingsPanel({ isOpen, onClose }) {
   }
 
   const handleClearStats = async () => {
-    const confirmed = window.confirm('Esto eliminara todas tus estadisticas guardadas. Esta seguro?')
-    if (!confirmed) return
+    if (!pendingClearConfirm) {
+      setPendingClearConfirm(true)
+      showInfo('Presiona de nuevo para confirmar borrado de estadisticas')
+      clearTimeout(clearConfirmTimerRef.current)
+      clearConfirmTimerRef.current = setTimeout(() => {
+        setPendingClearConfirm(false)
+      }, 3500)
+      return
+    }
+
+    setPendingClearConfirm(false)
+    clearTimeout(clearConfirmTimerRef.current)
 
     try {
       await window.melo.stats.clear()
       clearPlayHistory()
+      logger.info('Estadísticas borradas')
+      showSuccess('Estadísticas borradas correctamente')
+    } catch (err) {
+      logger.error('Error al borrar estadísticas', err)
+      showError('No pude borrar las estadísticas')
+    }
+  }
+
+  const persist = async (key, value, options = {}) => {
+    const {
+      successMessage,
+      errorMessage,
+      silentSuccess = true,
+    } = options
+
+    try {
+      await window.melo.saveSettings(key, value)
+      logger.debug(`Guardado: ${key}`, { value })
+
+      if (!silentSuccess && successMessage) {
+        console.log('Before toast:', successMessage)
+        showSuccess(successMessage)
+      }
+      return true
+    } catch (err) {
+      logger.error(`Error al guardar ${key}`, err)
+      const msg = errorMessage || `No pude guardar ${key}`
+      console.log('Before toast:', msg)
+      showError(msg)
+      return false
+    }
+  }
+
+  const handleNotificationsToggle = async (enabled) => {
+    setNotifications(enabled)
+    const saved = await persist('notificationsEnabled', enabled, {
+      successMessage: enabled ? 'Notificaciones activadas' : 'Notificaciones desactivadas',
+      errorMessage: 'No pude actualizar notificaciones',
+      silentSuccess: false,
+    })
+
+    if (!saved || !enabled) return
+
+    try {
+      await window.melo.notification?.show?.({
+        title: 'Melo',
+        body: 'Las notificaciones estan activas.',
+        silent: true,
+      })
     } catch (_) {}
   }
 
-  const persist = (key, value) => {
-    window.melo.saveSettings(key, value).catch(() => {})
-  }
-
-  const handleNotificationsToggle = (enabled) => {
-    setNotifications(enabled)
-    persist('notificationsEnabled', enabled)
-  }
-
-  const handleMediaKeysToggle = (enabled) => {
+  const handleMediaKeysToggle = async (enabled) => {
     setMediaKeys(enabled)
-    persist('mediaKeysEnabled', enabled)
+    await persist('mediaKeysEnabled', enabled, {
+      successMessage: enabled ? 'Atajos multimedia activados' : 'Atajos multimedia desactivados',
+      errorMessage: 'No pude actualizar atajos multimedia',
+      silentSuccess: false,
+    })
   }
 
   const handleThemeChange = async (nextTheme) => {
-    setTheme(nextTheme)
-    applyTheme(nextTheme, nextTheme === 'custom' ? customTheme : null)
-    await window.melo.saveSettings('theme', nextTheme)
+    try {
+      setTheme(nextTheme)
+      applyTheme(nextTheme, nextTheme === 'custom' ? customTheme : null)
+      await window.melo.saveSettings('theme', nextTheme)
+      showSuccess('Tema actualizado')
+    } catch (err) {
+      logger.error('No pude guardar el tema', err)
+      showError('No pude guardar el tema')
+    }
   }
 
-  const handleAutoUpdateToggle = (enabled) => {
+  const handleAutoUpdateToggle = async (enabled) => {
     setAutoUpdate(enabled)
-    persist('autoUpdateEnabled', enabled)
+    await persist('autoUpdateEnabled', enabled, {
+      successMessage: enabled ? 'Auto-update activado' : 'Auto-update desactivado',
+      errorMessage: 'No pude actualizar auto-update',
+      silentSuccess: false,
+    })
   }
 
-  const handleStatsToggle = (enabled) => {
+  const handleStatsToggle = async (enabled) => {
     setStats(enabled)
-    persist('statsEnabled', enabled)
+    await persist('statsEnabled', enabled, {
+      successMessage: enabled ? 'Historial activado' : 'Historial desactivado',
+      errorMessage: 'No pude actualizar historial',
+      silentSuccess: false,
+    })
   }
 
-  const handleTrayToggle = (enabled) => {
+  const handleTrayToggle = async (enabled) => {
     setTrayEnabled(enabled)
-    persist('trayEnabled', enabled)
+    await persist('trayEnabled', enabled, {
+      successMessage: enabled ? 'Bandeja activada' : 'Bandeja desactivada',
+      errorMessage: 'No pude actualizar bandeja',
+      silentSuccess: false,
+    })
 
     // Evitar estados invalidos: sin tray, closeBehavior debe ser quit.
     if (!enabled) {
       setCloseBehavior('quit')
-      persist('closeBehavior', 'quit')
+      await persist('closeBehavior', 'quit', {
+        successMessage: 'Al cerrar: salir',
+        errorMessage: 'No pude actualizar comportamiento al cerrar',
+        silentSuccess: false,
+      })
     }
   }
 
-  const handleCloseBehaviorChange = (nextValue) => {
+  const handleCloseBehaviorChange = async (nextValue) => {
     const value = nextValue === 'quit' ? 'quit' : 'tray'
     if (!trayEnabled && value !== 'quit') return
     setCloseBehavior(value)
-    persist('closeBehavior', value)
+    await persist('closeBehavior', value, {
+      successMessage: value === 'tray' ? 'Al cerrar: ir a bandeja' : 'Al cerrar: salir',
+      errorMessage: 'No pude actualizar comportamiento al cerrar',
+      silentSuccess: false,
+    })
   }
 
-  const handleAutostartToggle = (enabled) => {
+  const handleAutostartToggle = async (enabled) => {
     setAutostartEnabled(enabled)
-    persist('autostartEnabled', enabled)
+    await persist('autostartEnabled', enabled, {
+      successMessage: enabled ? 'Inicio automático activado' : 'Inicio automático desactivado',
+      errorMessage: 'No pude actualizar inicio automático',
+      silentSuccess: false,
+    })
   }
 
-  const handleStartMinimizedToggle = (enabled) => {
+  const handleStartMinimizedToggle = async (enabled) => {
     setStartMinimized(enabled)
-    persist('startMinimized', enabled)
+    await persist('startMinimized', enabled, {
+      successMessage: enabled ? 'Inicio minimizado activado' : 'Inicio minimizado desactivado',
+      errorMessage: 'No pude actualizar inicio minimizado',
+      silentSuccess: false,
+    })
   }
 
-  const handleImmersiveToggle = (enabled) => {
+  const handleImmersiveToggle = async (enabled) => {
     setImmersive(enabled)
-    persist('immersiveEnabled', enabled)
+    await persist('immersiveEnabled', enabled, {
+      successMessage: enabled ? 'Modo inmersivo activado' : 'Modo inmersivo desactivado',
+      errorMessage: 'No pude actualizar modo inmersivo',
+      silentSuccess: false,
+    })
   }
 
-  const handleOverlayControlsToggle = (enabled) => {
+  const handleOverlayControlsToggle = async (enabled) => {
     setOverlayControls(enabled)
-    persist('overlayControlsEnabled', enabled)
+    await persist('overlayControlsEnabled', enabled, {
+      successMessage: enabled ? 'Controles flotantes activados' : 'Controles flotantes desactivados',
+      errorMessage: 'No pude actualizar controles flotantes',
+      silentSuccess: false,
+    })
   }
 
-  const handleOverlayPositionChange = (position) => {
+  const handleOverlayPositionChange = async (position) => {
     setOverlayPosition(position)
-    persist('overlayPosition', position)
+    await persist('overlayPosition', position, {
+      successMessage: position === 'top' ? 'Controles arriba' : 'Controles abajo',
+      errorMessage: 'No pude actualizar posición de controles',
+      silentSuccess: false,
+    })
   }
 
   const handleDiscordToggle = async (enabled) => {
-    setDiscord(enabled)
-    persist('discordEnabled', enabled)
-    const ok = await window.melo.discordToggle(enabled, discordClientId)
-    setDiscordConnected(Boolean(ok))
+    try {
+      setDiscord(enabled)
+      await persist('discordEnabled', enabled)
+      const ok = await window.melo.discordToggle(enabled, discordClientId)
+      setDiscordConnected(Boolean(ok))
+
+      if (ok) {
+        const msg = enabled ? 'Discord conectado' : 'Discord desconectado'
+        console.log('Before toast:', msg)
+        showSuccess(msg)
+      } else {
+        const msg = enabled ? 'No pude conectar Discord' : 'No pude desconectar Discord'
+        console.log('Before toast:', msg)
+        showError(msg)
+      }
+    } catch (err) {
+      logger.error('Discord toggle failed', err)
+      const msg = 'Error al actualizar Discord'
+      console.log('Before toast:', msg)
+      showError(msg)
+    }
   }
 
   const handleDiscordConnect = async () => {
-    persist('discordClientId', discordClientId)
-    const ok = await window.melo.discordToggle(true, discordClientId)
-    setDiscord(true)
-    persist('discordEnabled', true)
-    setDiscordConnected(Boolean(ok))
+    try {
+      await persist('discordClientId', discordClientId)
+      const ok = await window.melo.discordToggle(true, discordClientId)
+      setDiscord(true)
+      await persist('discordEnabled', true)
+      setDiscordConnected(Boolean(ok))
+
+      if (ok) {
+        const msg = 'Discord conectado correctamente'
+        console.log('Before toast:', msg)
+        showSuccess(msg)
+      } else {
+        const msg = 'No pude conectar Discord'
+        console.log('Before toast:', msg)
+        showError(msg)
+      }
+    } catch (err) {
+      logger.error('Discord connect failed', err)
+      const msg = 'Error al conectar Discord'
+      console.log('Before toast:', msg)
+      showError(msg)
+    }
   }
 
-  const handleLfmToggle = (enabled) => {
+  const handleLfmToggle = async (enabled) => {
     setLastfm(enabled)
-    persist('lastfmEnabled', enabled)
+    await persist('lastfmEnabled', enabled, {
+      successMessage: enabled ? 'Scrobbling activado' : 'Scrobbling desactivado',
+      errorMessage: 'No pude actualizar Last.fm',
+      silentSuccess: false,
+    })
     if (!enabled) {
       setLfmStep(1)
       setLfmToken(null)
@@ -207,37 +367,61 @@ export default function SettingsPanel({ isOpen, onClose }) {
   }
 
   const handleLfmAuth = async () => {
-    await window.melo.lastfmConfigure({
-      apiKey: lastfmApiKey,
-      apiSecret: lastfmApiSecret,
-      sessionKey: '',
-      enabled: true,
-    })
-    persist('lastfm', { apiKey: lastfmApiKey, apiSecret: lastfmApiSecret, sessionKey: '' })
-
-    const token = await window.melo.lastfmAuth()
-    setLfmToken(token)
-    setLfmStep(3)
-  }
-
-  const handleLfmConfirm = async () => {
-    setLfmStep(4)
-    const sessionKey = await window.melo.lastfmGetSession(lfmToken)
-    if (sessionKey) {
-      setLastfmSessionKey(sessionKey)
+    try {
       await window.melo.lastfmConfigure({
         apiKey: lastfmApiKey,
         apiSecret: lastfmApiSecret,
-        sessionKey,
+        sessionKey: '',
         enabled: true,
       })
-      persist('lastfm', { apiKey: lastfmApiKey, apiSecret: lastfmApiSecret, sessionKey })
-      persist('lastfmEnabled', true)
-      setLastfm(true)
-      setLfmStep(5)
-      return
+      await persist('lastfm', { apiKey: lastfmApiKey, apiSecret: lastfmApiSecret, sessionKey: '' })
+
+      const token = await window.melo.lastfmAuth()
+      setLfmToken(token)
+      setLfmStep(3)
+      const msg = 'Continuar autorización en Last.fm'
+      console.log('Before toast:', msg)
+      showSuccess(msg)
+    } catch (err) {
+      logger.error('Last.fm auth init failed', err)
+      const msg = 'Error iniciando autorización de Last.fm'
+      console.log('Before toast:', msg)
+      showError(msg)
     }
-    setLfmStep(3)
+  }
+
+  const handleLfmConfirm = async () => {
+    try {
+      setLfmStep(4)
+      const sessionKey = await window.melo.lastfmGetSession(lfmToken)
+      if (sessionKey) {
+        setLastfmSessionKey(sessionKey)
+        await window.melo.lastfmConfigure({
+          apiKey: lastfmApiKey,
+          apiSecret: lastfmApiSecret,
+          sessionKey,
+          enabled: true,
+        })
+        await persist('lastfm', { apiKey: lastfmApiKey, apiSecret: lastfmApiSecret, sessionKey })
+        await persist('lastfmEnabled', true)
+        setLastfm(true)
+        setLfmStep(5)
+        const msg = 'Last.fm conectado correctamente'
+        console.log('Before toast:', msg)
+        showSuccess(msg)
+        return
+      }
+      setLfmStep(3)
+      const msg = 'No se pudo confirmar Last.fm todavía'
+      console.log('Before toast:', msg)
+      showError(msg)
+    } catch (err) {
+      logger.error('Last.fm confirm failed', err)
+      setLfmStep(3)
+      const msg = 'Error al confirmar sesión de Last.fm'
+      console.log('Before toast:', msg)
+      showError(msg)
+    }
   }
 
   const handleOpenService = (service) => {
@@ -256,7 +440,7 @@ export default function SettingsPanel({ isOpen, onClose }) {
     <>
       <div className={`settings-overlay ${isOpen ? 'show' : ''}`} onClick={onClose} />
 
-      <aside className={`settings-panel ${isOpen ? 'open' : ''}`}>
+      <aside className={`settings-panel ${isOpen ? 'open animate-slide-up' : ''}`}>
         <header>
           <h2>Ajustes</h2>
           <button onClick={onClose}><X size={18} /></button>

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Download, Upload, RotateCcw } from 'lucide-react'
 import { usePlayerStore } from '../store/usePlayerStore'
+import { useToast } from '../hooks/useToast'
 
 const DEFAULT_CUSTOM = {
   '--bg-base': '#0d0d0d',
@@ -17,6 +18,7 @@ const DEFAULT_CUSTOM = {
 export default function ThemeEditor({ onClose }) {
   const theme = usePlayerStore((s) => s.theme)
   const setCustomTheme = usePlayerStore((s) => s.setCustomTheme)
+  const { error: showError } = useToast()
   const [values, setValues] = useState(() => {
     try {
       const saved = localStorage.getItem('melo-custom-theme')
@@ -72,7 +74,7 @@ export default function ThemeEditor({ onClose }) {
           setValues(imported)
           setCustomTheme(imported)
         } catch {
-          alert('Archivo de tema invalido')
+          showError('Archivo de tema invalido')
         }
       }
       reader.readAsText(file)

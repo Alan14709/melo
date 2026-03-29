@@ -213,6 +213,12 @@ contextBridge.exposeInMainWorld('melo', {
   onServiceActive: (cb) => {
     ipcRenderer.on('service:active', (_e, data) => cb(data))
   },
+  onCommandPaletteToggle: (cb) => {
+    ipcRenderer.on('command-palette:toggle', (_e, data) => cb(data))
+  },
+  onShortcut: (cb) => {
+    ipcRenderer.on('shortcut:event', (_e, data) => cb(data))
+  },
   playerAction: (action) => {
     safeSend('player:action', action)
   },
@@ -226,6 +232,9 @@ contextBridge.exposeInMainWorld('melo', {
     return safeInvoke('player:getProgress')
   },
   switchService: (serviceId, url, service) => {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('SWITCH SERVICE CALLED', { serviceId, url })
+    }
     safeSend('service:switch', { serviceId, url, service })
   },
   hideBrowserView: () => {
@@ -277,6 +286,11 @@ contextBridge.exposeInMainWorld('melo', {
   saveSettings: (key, value) => {
     return safeInvoke('settings:save', { key, value })
   },
+  notification: {
+    show: ({ title, body, silent = true } = {}) => {
+      return safeInvoke('notification:show', { title, body, silent })
+    },
+  },
   stats: {
     getHistory: (opts) => safeInvoke('stats:getHistory', opts),
     getSummary: () => safeInvoke('stats:getSummary'),
@@ -297,6 +311,10 @@ contextBridge.exposeInMainWorld('melo', {
     onChange: (cb) => ipcRenderer.on('fallback:status', (_e, data) => cb(data)),
     retryManual: () => safeInvoke('fallback:retry-manual'),
     safeMode: () => safeInvoke('fallback:safe-mode'),
+  },
+  gpuInfo: {
+    getStatus: () => safeInvoke('gpu:info'),
+    onChange: (cb) => ipcRenderer.on('gpu:status', (_e, data) => cb(data)),
   },
   update: {
     onChecking: (cb) => ipcRenderer.on('update:checking', cb),

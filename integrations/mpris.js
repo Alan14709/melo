@@ -123,16 +123,14 @@ function buildMetadata(state) {
   return metadata
 }
 
-function emitPlayerPropertiesChanged() {
-  const playerInterface = runtime.playerInterface
-  if (!playerInterface) return
+async function emitPlayerPropertiesChanged() {
+  if (!runtime.bus || !runtime.playerInterface) return
 
   try {
     const playbackStatus = getPlaybackStatus(runtime.context.state)
     const metadata = buildMetadata(runtime.context.state)
     const signature = JSON.stringify({
       playbackStatus,
-      metadataKeys: Object.keys(metadata).sort(),
       title: runtime.context.state?.title || '',
       artist: runtime.context.state?.artist || [],
       album: runtime.context.state?.album || '',
@@ -142,12 +140,23 @@ function emitPlayerPropertiesChanged() {
     if (runtime.lastEmissionSignature === signature) return
     runtime.lastEmissionSignature = signature
 
-    playerInterface.emitPropertiesChanged({
-      PlaybackStatus: new Variant('s', playbackStatus),
-      Metadata: new Variant('a{sv}', metadata),
-    }, [])
+    await runtime.bus.send(new dbus.Message({
+      type: dbus.MessageType.SIGNAL,
+      path: MPRIS_OBJECT_PATH,
+      interface: 'org.freedesktop.DBus.Properties',
+      member: 'PropertiesChanged',
+      signature: 'sa{sv}as',
+      body: [
+        'org.mpris.MediaPlayer2.Player',
+        {
+          PlaybackStatus: new Variant('s', playbackStatus),
+          Metadata: new Variant('a{sv}', metadata),
+        },
+        [],
+      ],
+    }))
   } catch (error) {
-    logWarn('properties_changed_failed', { message: error?.message || 'unknown_error' })
+    logWarn('properties_changed_emit_failed', { message: error?.message || 'unknown_error' })
   }
 }
 
