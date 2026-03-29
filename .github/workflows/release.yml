@@ -12,7 +12,10 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
-      ELECTRON_MIRROR: https://github.com/castlabs/electron-releases/releases/download/v
+      ELECTRON_MIRROR: https://github.com/castlabs/electron-releases/releases/download/
+      ELECTRON_CUSTOM_DIR: v30.3.1+wvcus
+      npm_config_electron_mirror: https://github.com/castlabs/electron-releases/releases/download/
+      npm_config_electron_custom_dir: v30.3.1+wvcus
 
     steps:
       - uses: actions/checkout@v4
@@ -27,7 +30,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/electron
-          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          key: ${{ runner.os }}-electron-30.3.1+wvcus
           restore-keys: |
             ${{ runner.os }}-electron-
 
@@ -35,15 +38,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "Installing with castLabs mirror..."
-          if npm install; then
-            echo "castLabs install OK"
-          else
-            echo "castLabs install failed, retrying with official Electron fallback"
-            rm -rf node_modules
-            npm pkg set devDependencies.electron='^30.3.1'
-            ELECTRON_MIRROR=https://github.com/electron/electron/releases/download/ npm install
-          fi
+          echo "Installing with castLabs mirror (v30.3.1+wvcus)..."
+          export ELECTRON_MIRROR=https://github.com/castlabs/electron-releases/releases/download/
+          export ELECTRON_CUSTOM_DIR=v30.3.1+wvcus
+          npm install --verbose || {
+            echo "castLabs install failed, retrying with official Electron"
+            rm -rf node_modules package-lock.json
+            npm install
+          }
 
       - name: Syntax check
         run: npm run test:syntax
@@ -52,16 +54,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
+          ELECTRON_MIRROR: https://github.com/castlabs/electron-releases/releases/download/
+          ELECTRON_CUSTOM_DIR: v30.3.1+wvcus
         shell: bash
         run: |
           set -euo pipefail
-          echo "Building with castLabs Electron..."
-          if npm run release:publish; then
-            echo "castLabs build OK"
-          else
-            echo "castLabs build failed, retrying with official Electron fallback"
-            rm -rf node_modules
-            npm pkg set devDependencies.electron='^30.3.1'
-            ELECTRON_MIRROR=https://github.com/electron/electron/releases/download/ npm install
-            ELECTRON_MIRROR=https://github.com/electron/electron/releases/download/ npm run release:publish
-          fi
+          echo "Building with castLabs Electron (v30.3.1+wvcus with Widevine)..."
+          export ELECTRON_MIRROR=https://github.com/castlabs/electron-releases/releases/download/
+          export ELECTRON_CUSTOM_DIR=v30.3.1+wvcus
+          npm run release:publish

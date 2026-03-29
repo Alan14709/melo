@@ -33,7 +33,7 @@
     "cmdk": "^0.2.0",
     "concurrently": "^8.0.0",
     "cross-env": "^7.0.3",
-    "electron": "github:castlabs/electron-releases#v30.3.1+wvcus",
+    "electron": "30.3.1",
     "electron-builder": "^24.0.0",
     "lucide-react": "^0.383.0",
     "react": "^18.2.0",
@@ -76,7 +76,7 @@
       "releaseType": "release"
     },
     "electronDownload": {
-      "mirror": "https://github.com/castlabs/electron-releases/releases/download/v"
+      "mirror": "https://github.com/castlabs/electron-releases/releases/download/"
     },
     "linux": {
       "target": [
