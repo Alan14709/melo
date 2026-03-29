@@ -54,23 +54,26 @@ clean_attempt_state() {
 set_castlabs_env() {
   local castlabs_version="$1"
   local base_version="$2"
+  local custom_dir
+
+  custom_dir="v${castlabs_version}"
 
   export ELECTRON_MIRROR="$CASTLABS_MIRROR"
   export ELECTRON_CUSTOM_VERSION="$castlabs_version"
-  export ELECTRON_CUSTOM_DIR="$base_version"
-
-  export npm_config_electron_mirror="$CASTLABS_MIRROR"
-  export npm_config_electron_custom_version="$castlabs_version"
-  export npm_config_electron_custom_dir="$base_version"
+  export ELECTRON_CUSTOM_DIR="$custom_dir"
+  export electron_use_remote_checksums="true"
 }
 
 unset_castlabs_env() {
   unset ELECTRON_MIRROR || true
   unset ELECTRON_CUSTOM_VERSION || true
   unset ELECTRON_CUSTOM_DIR || true
-  unset npm_config_electron_mirror || true
-  unset npm_config_electron_custom_version || true
-  unset npm_config_electron_custom_dir || true
+  unset electron_use_remote_checksums || true
+}
+
+has_castlabs_cached_artifact() {
+  local castlabs_version="$1"
+  find "${HOME}/.cache/electron" -type f -name "electron-v${castlabs_version}-linux-x64.zip" | grep -q .
 }
 
 install_log_reason() {
@@ -110,11 +113,24 @@ try_castlabs_version() {
         set_output "install_mode" "castlabs"
         set_output "selected_castlabs_version" "$castlabs_version"
         set_output "selected_electron_version" "$base_version"
-        set_output "selected_custom_dir" "$base_version"
+        set_output "selected_custom_dir" "v${castlabs_version}"
         set_env "DEBUG_BUILD" "false"
         set_env "ELECTRON_WVCUS_VERSION" "$castlabs_version"
         set_env "ELECTRON_CUSTOM_VERSION" "$castlabs_version"
-        set_env "ELECTRON_CUSTOM_DIR" "$base_version"
+        set_env "ELECTRON_CUSTOM_DIR" "v${castlabs_version}"
+        return 0
+      fi
+
+      if has_castlabs_cached_artifact "$castlabs_version"; then
+        warn "Widevine file not found, but castLabs artifact was downloaded successfully"
+        set_output "install_mode" "castlabs"
+        set_output "selected_castlabs_version" "$castlabs_version"
+        set_output "selected_electron_version" "$base_version"
+        set_output "selected_custom_dir" "v${castlabs_version}"
+        set_env "DEBUG_BUILD" "false"
+        set_env "ELECTRON_WVCUS_VERSION" "$castlabs_version"
+        set_env "ELECTRON_CUSTOM_VERSION" "$castlabs_version"
+        set_env "ELECTRON_CUSTOM_DIR" "v${castlabs_version}"
         return 0
       fi
 

@@ -158,7 +158,7 @@ Reglas clave del pipeline:
    - `~/.cache/electron`
    - `package-lock.json`
 6. Hace reintentos de `npm install` por version.
-7. Requiere validacion de Widevine (`libwidevinecdm.so`).
+7. Requiere validacion de runtime DRM (archivo `libwidevinecdm.so` o evidencia de artefacto castLabs descargado en cache).
 8. Si castLabs falla en todas las versiones:
    - fallback a Electron oficial solo debug
    - marca `DEBUG_BUILD=true`
