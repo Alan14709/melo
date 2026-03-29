@@ -87,18 +87,30 @@ function detectSandboxStatus(electronBinary) {
   }
 }
 
-function buildArgs(baseArgs, sandboxStatus, runtime) {
+function detectLaunchMode(baseArgs) {
+  if (process.env.MELO_FORCE_PACKAGED === '1') return 'packaged'
+  if (process.env.MELO_FORCE_PACKAGED === '0') return 'development'
+  if (process.env.VITE_DEV_SERVER_URL) return 'development'
+  if (process.env.npm_lifecycle_event) return 'development'
+
+  const firstArg = String(baseArgs[0] || '')
+  if (firstArg === '.' || firstArg.endsWith('.js') || firstArg.endsWith('.mjs')) {
+    return 'development'
+  }
+
+  return 'packaged'
+}
+
+function buildArgs(baseArgs, sandboxStatus, launchMode) {
   const args = [...baseArgs]
+  const isPackaged = launchMode === 'packaged'
   const hasNoSandbox = args.includes('--no-sandbox')
   const hasSetuidDisable = args.includes('--disable-setuid-sandbox')
   const hasSandboxFlag = args.includes('--melo-no-sandbox-fallback')
 
-  // Con NVIDIA en Linux el zygote puede fallar con sandbox activo
-  // incluso con helper setuid válido. Forzar no-sandbox desde inicio.
-  if (runtime?.gpuVendor === 'nvidia' && process.platform === 'linux') {
-    if (!args.includes('--no-sandbox')) args.push('--no-sandbox')
-    if (!args.includes('--disable-setuid-sandbox')) args.push('--disable-setuid-sandbox')
-    return args
+  // En produccion no permitimos no-sandbox ni disable-setuid-sandbox.
+  if (isPackaged) {
+    return args.filter((arg) => arg !== '--no-sandbox' && arg !== '--disable-setuid-sandbox')
   }
 
   if (!sandboxStatus.usable) {
@@ -136,16 +148,11 @@ function isEarlyCrash(runtimeMs) {
   return Number(runtimeMs || 0) <= EARLY_CRASH_WINDOW_MS
 }
 
-function shouldRetryWithSandboxFallback({ code, signal, args, runtimeMs, sandboxStatus, runtime }) {
+function shouldRetryWithSandboxFallback({ code, signal, args, runtimeMs, sandboxStatus, launchMode }) {
   if (process.platform !== 'linux') return false
+  if (launchMode === 'packaged') return false
   if (hasNoSandboxArgs(args)) return false
   if (!isEarlyCrash(runtimeMs)) return false
-
-  // En NVIDIA, tratar SIGTRAP/133/134 como crash de zygote (EINVAL)
-  // aunque el helper sandbox sea usable.
-  const isNvidiaCrash = runtime?.gpuVendor === 'nvidia'
-    && (signal === 'SIGTRAP' || signal === 'SIGABRT' || code === 133 || code === 134)
-  if (isNvidiaCrash) return true
 
   // Lógica original: fallback de sandbox cuando helper no es usable.
   if (sandboxStatus?.usable !== false) return false
@@ -207,13 +214,15 @@ async function main() {
   const userArgs = process.argv.slice(2)
   const runtimeContext = detectRuntimeContext()
   const sandboxStatus = detectSandboxStatus(electronBinary)
-  const finalArgs = buildArgs(userArgs, sandboxStatus, runtimeContext)
+  const launchMode = detectLaunchMode(userArgs)
+  const finalArgs = buildArgs(userArgs, sandboxStatus, launchMode)
 
   const logPayload = {
     source: 'electron-launcher',
+    launchMode,
     runtime: runtimeContext,
     sandbox: sandboxStatus,
-    namespaceSandboxFallback: !sandboxStatus.usable,
+    namespaceSandboxFallback: !sandboxStatus.usable && launchMode !== 'packaged',
     autoNoSandbox: false,
     args: finalArgs,
   }
@@ -233,9 +242,10 @@ async function main() {
     MELO_GPU_RESET: process.env.MELO_GPU_RESET || '0',
     MELO_GPU_RESET_ALREADY: process.env.MELO_GPU_RESET_ALREADY || '0',
     MELO_SANDBOX_AUTO_DISABLED: process.env.MELO_SANDBOX_AUTO_DISABLED || '0',
-    MELO_SANDBOX_NAMESPACE_FALLBACK: !sandboxStatus.usable ? '1' : (process.env.MELO_SANDBOX_NAMESPACE_FALLBACK || '0'),
+    MELO_SANDBOX_NAMESPACE_FALLBACK: (!sandboxStatus.usable && launchMode !== 'packaged') ? '1' : (process.env.MELO_SANDBOX_NAMESPACE_FALLBACK || '0'),
     MELO_SANDBOX_HELPER_REASON: sandboxStatus.reason || 'unknown',
     MELO_EARLY_SOFTWARE_FALLBACK: process.env.MELO_EARLY_SOFTWARE_FALLBACK || '0',
+    MELO_LAUNCH_MODE: launchMode,
   }
 
   let currentArgs = finalArgs
@@ -248,7 +258,7 @@ async function main() {
     args: currentArgs,
     runtimeMs: result.runtimeMs,
     sandboxStatus,
-    runtime: runtimeContext,
+    launchMode,
   })) {
     const retryBaseArgs = stripConflictingGpuArgs(stripResetArgs(currentArgs))
       .filter((arg) => arg !== '--melo-namespace-sandbox-fallback')

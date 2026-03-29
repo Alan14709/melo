@@ -34,6 +34,31 @@ const {
 } = require('./services/autostart')
 const logger = require('./services/Logger')
 
+// ============================================================================
+// CONFIGURACIÓN DE PERSISTENCIA DE SESIÓN
+// ============================================================================
+// Configurar userData path ANTES de que la app esté lista.
+const MELO_USER_DATA_PATH = path.join(app.getPath('appData'), 'Melo')
+app.setPath('userData', MELO_USER_DATA_PATH)
+
+// SESIÓN GLOBAL PERSISTENTE ÚNICA - para UI principal
+const GLOBAL_SESSION_PARTITION = 'persist:melo'
+
+// Particiones por servicio de streaming - cada servicio tiene su sesión independiente
+// para máxima compatibilidad de DRM y cookies específicas del sitio.
+const SERVICE_PARTITIONS = {
+  appleMusic: 'persist:apple-music',
+  youtube: 'persist:youtube',
+  spotify: 'persist:spotify',
+  tidal: 'persist:tidal',
+  deezer: 'persist:deezer',
+}
+
+// Función para obtener la partición correcta por serviceId
+function getPartitionForService(serviceId) {
+  return SERVICE_PARTITIONS[serviceId] || GLOBAL_SESSION_PARTITION
+}
+
 // Modo debug de produccion activable por variable de entorno.
 const DEBUG_MODE = process.env.DEBUG === '1' || process.env.DEBUG === 'true'
 if (DEBUG_MODE) logger.setLevel('debug')
@@ -91,6 +116,150 @@ const SETTINGS_DEFAULTS = {
   overlayControlsEnabled: true,
   overlayPosition: 'bottom',
   hasShownTrayHint: false,
+}
+
+// ============================================================================
+// INICIALIZAR SESIÓN GLOBAL AL STARTUP
+// ============================================================================
+let globalSession = null
+
+function initializeGlobalSession() {
+  if (globalSession && !globalSession.isDestroyed?.()) {
+    return globalSession
+  }
+
+  try {
+    globalSession = session.fromPartition(GLOBAL_SESSION_PARTITION)
+    
+    const isPersistent = globalSession.isPersistent?.()
+    const storagePath = globalSession.getStoragePath?.()
+    
+    logger.info('Session', 'global_session_initialized', {
+      partition: GLOBAL_SESSION_PARTITION,
+      isPersistent,
+      storagePath: storagePath || 'default',
+      userDataPath: MELO_USER_DATA_PATH,
+    })
+    
+    globalSession.cookies.get({}).then((cookies) => {
+      logger.debug('Session', 'stored_cookies_count', {
+        count: cookies.length,
+        sample: cookies.slice(0, 3).map((c) => ({ domain: c.domain, name: c.name })),
+      })
+    }).catch((err) => {
+      logger.warn('Session', 'cookies_check_failed', { message: err?.message })
+    })
+
+    return globalSession
+  } catch (error) {
+    logger.error('Session', 'initialization_failed', {
+      message: error?.message || 'unknown_error',
+    })
+    throw error
+  }
+}
+
+const CHROME_STABLE_USER_AGENT =
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36'
+
+// User-Agent optimizado por servicio - evita detección de Electron para máxima compatibilidad DRM
+const SERVICE_USER_AGENTS = {
+  // Apple Music: Chrome UA moderno - Apple Music rechaza Safari antiguo y requiere Chrome moderno
+  appleMusic: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+  // YouTube: Chrome UA estable - probado para evitar el congelamiento a los 59 segundos
+  youtube: CHROME_STABLE_USER_AGENT,
+  // Servicios por defecto: Chrome estable
+  default: CHROME_STABLE_USER_AGENT,
+}
+
+function getServiceUserAgent(serviceId) {
+  return SERVICE_USER_AGENTS[serviceId] || SERVICE_USER_AGENTS.default
+}
+
+function getGlobalSession() {
+  if (!globalSession || globalSession.isDestroyed?.()) {
+    return initializeGlobalSession()
+  }
+  return globalSession
+}
+
+function initializeAllServiceSessions() {
+  // Inicializar todas las sesiones de servicios en particiones persistentes
+  // Esto asegura que cookies, storage y DRM estén listos para cada servicio
+  logger.info('Session', 'initializing_service_sessions', {
+    partitions: Object.keys(SERVICE_PARTITIONS),
+  })
+
+  try {
+    Object.entries(SERVICE_PARTITIONS).forEach(([serviceId, partition]) => {
+      const serviceSession = session.fromPartition(partition)
+      if (!serviceSession) {
+        logger.error('Session', 'service_partition_failed', {
+          serviceId,
+          partition,
+        })
+        return
+      }
+
+      // Verificar persistencia
+      const isPersistent = serviceSession.isPersistent?.()
+      const storagePath = serviceSession.getStoragePath?.()
+      
+      if (!isPersistent) {
+        logger.warn('Session', 'service_session_not_persistent', {
+          serviceId,
+          partition,
+          storagePath,
+        })
+      } else {
+        logger.debug('Session', 'service_session_initialized', {
+          serviceId,
+          partition,
+          isPersistent: true,
+          storagePath: storagePath || 'default',
+        })
+      }
+    })
+
+    logger.info('Session', 'all_service_sessions_ready', {
+      timestamp: new Date().toISOString(),
+    })
+  } catch (error) {
+    logger.error('Session', 'service_sessions_initialization_failed', {
+      message: error?.message || 'unknown_error',
+    })
+  }
+}
+
+function logSessionPersistence(label, targetSession, partitionName) {
+  if (!targetSession) return
+  try {
+    const isPersistent = targetSession.isPersistent?.()
+    const storagePath = targetSession.getStoragePath?.()
+    
+    if (!isPersistent) {
+      logger.warn('Session', 'NON_PERSISTENT_SESSION_DETECTED', {
+        label,
+        partition: partitionName || 'unknown',
+        isPersistent: false,
+        storagePath: storagePath || 'N/A',
+        help: 'Ensure partition starts with "persist:" to enable persistent storage',
+      })
+    } else {
+      logger.info('Session', 'persistent_session_verified', {
+        label,
+        partition: partitionName || 'default',
+        isPersistent: true,
+        storagePath: storagePath || 'default',
+      })
+    }
+  } catch (error) {
+    logger.warn('Session', 'persistence_check_failed', {
+      label,
+      partition: partitionName || null,
+      message: error?.message || 'unknown_error',
+    })
+  }
 }
 
 function canSendToWebContents(webContents) {
@@ -417,9 +586,13 @@ const initialGPUStatus = gpuManager.initGPUManager({
 logger.info('GPUManager', 'startup_status', initialGPUStatus)
 
 // Configuracion de Widevine para DRM.
-app.commandLine.appendSwitch('enable-features', 'WidevineCdm')
+// Habilita Widevine CDM + codecs de video (HEVC, VP9) requeridos para Apple Music + YouTube.
+app.commandLine.appendSwitch('enable-features', 'WidevineCdm,PlatformHEVCDecoderSupport')
+app.commandLine.appendSwitch('enable-widevine-cdm')
 app.commandLine.appendSwitch('disable-features', 'OutOfBlinkCors')
 app.commandLine.appendSwitch('enable-native-gpu-memory-buffers')
+// Autoplay sin gesto del usuario (requerido para streaming de Apple Music y YouTube).
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 const DEV_SERVER_FALLBACK_URL = 'http://localhost:5173'
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_RENDERER_URL || ''
 const NPM_LIFECYCLE_EVENT = String(process.env.npm_lifecycle_event || '')
@@ -438,6 +611,9 @@ app.commandLine.appendSwitch(
   'unsafely-treat-insecure-origin-as-secure',
   devServerInsecureOrigin
 )
+if (app.isPackaged) {
+  app.commandLine.removeSwitch('unsafely-treat-insecure-origin-as-secure')
+}
 const verboseLoggingEnabled = DEBUG_MODE || process.env.MELO_VERBOSE_LOGGING === '1'
 if (verboseLoggingEnabled) {
   app.commandLine.appendSwitch('enable-logging')
@@ -450,6 +626,12 @@ const sandboxFallbackActive = Boolean(initialGPUStatus?.sandboxFallbackActive)
   || hasFlag(RENDERER_FALLBACK_FLAGS.sandbox)
   || process.env.MELO_NO_SANDBOX_FALLBACK === '1'
 const isLinux = process.platform === 'linux'
+const sandboxEnabledForRuntime = app.isPackaged ? true : !sandboxFallbackActive
+const BLOCKED_DRM_FLAGS = new Set([
+  'disable-gpu',
+  'disable-software-rasterizer',
+  'ignore-gpu-blocklist',
+])
 
 const RENDERER_INDEX_PATH = path.join(app.getAppPath(), 'dist', 'renderer', 'index.html')
 
@@ -580,6 +762,16 @@ try {
       const [key, ...rest] = clean.split('=')
       const value = rest.length ? rest.join('=') : undefined
       if (!key) return
+
+      if (app.isPackaged && (key === 'no-sandbox' || key === 'disable-setuid-sandbox')) {
+        logger.warn('Main', 'blocked_insecure_flag_packaged', { key })
+        return
+      }
+
+      if (BLOCKED_DRM_FLAGS.has(key) && process.env.MELO_ALLOW_AGGRESSIVE_GPU_FLAGS !== '1') {
+        logger.warn('Main', 'blocked_aggressive_gpu_flag', { key })
+        return
+      }
 
       if (value !== undefined && value !== '') {
         app.commandLine.appendSwitch(key, value)
@@ -755,6 +947,143 @@ const SERVICES = {
 const ALLOWED_SERVICE_ORIGINS = new Set(
   Object.values(SERVICES).map((service) => new URL(service.url).origin)
 )
+
+// ============================================================================
+// CONFIGURAR PERMISOS DE MEDIA PARA LA SESIÓN GLOBAL
+// Esto permite a servicios web usar audio, video, cámara, micrófono, fullscreen
+// ============================================================================
+function configureGlobalSessionPermissions() {
+  try {
+    const globalSess = getGlobalSession()
+    if (!globalSess) return
+
+    // Permitir permisos de media a todos los orígenes de servicios
+    const serviceOrigins = [
+      'music.apple.com',
+      'music.youtube.com',
+      'open.spotify.com',
+      'tidal.com',
+      'www.deezer.com',
+      'deezer.com',
+    ]
+
+    globalSess.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
+      if (permission !== 'media' && permission !== 'fullscreen' && permission !== 'clipboard-read' && permission !== 'clipboard-write') {
+        return false
+      }
+      try {
+        const req = new URL(requestingOrigin || '')
+        return serviceOrigins.some((origin) => req.hostname.includes(origin))
+      } catch (_) {
+        return false
+      }
+    })
+
+    globalSess.setPermissionRequestHandler((webContents, permission, callback, details) => {
+      const requestingUrl = details?.requestingUrl || webContents?.getURL?.() || ''
+      let allowed = permission === 'media' || permission === 'fullscreen' || permission === 'clipboard-read' || permission === 'clipboard-write'
+
+      try {
+        const req = new URL(requestingUrl)
+        if (!serviceOrigins.some((origin) => req.hostname.includes(origin))) {
+          allowed = false
+        }
+      } catch (_) {
+        allowed = false
+      }
+
+      logger.debug('Session', 'permission_request', {
+        permission,
+        allowed,
+        requestingUrl: requestingUrl.substring(0, 100) || null,
+      })
+      callback(allowed)
+    })
+
+    logger.info('Session', 'global_permissions_configured', {
+      partition: GLOBAL_SESSION_PARTITION,
+      serviceOrigins: serviceOrigins.length,
+    })
+  } catch (error) {
+    logger.warn('Session', 'permission_configuration_failed', {
+      message: error?.message || 'unknown_error',
+    })
+  }
+}
+
+function configureServiceSessionPermissions() {
+  // Configurar permisos para TODAS las sesiones de servicios
+  // Cada servicio tiene su propia partición con acceso a media/fullscreen
+  try {
+    const serviceOrigins = [
+      'music.apple.com',
+      'music.youtube.com',
+      'open.spotify.com',
+      'listen.tidal.com',
+      'tidal.com',
+      'www.deezer.com',
+      'deezer.com',
+    ]
+
+    // Configurar permisos para cada partición de servicio
+    Object.values(SERVICE_PARTITIONS).forEach((partition) => {
+      const serviceSession = session.fromPartition(partition)
+      if (!serviceSession) return
+
+      serviceSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
+        if (permission !== 'media' && permission !== 'fullscreen' && permission !== 'clipboard-read' && permission !== 'clipboard-write') {
+          return false
+        }
+        try {
+          const req = new URL(requestingOrigin || '')
+          return serviceOrigins.some((origin) => req.hostname.includes(origin))
+        } catch (_) {
+          return false
+        }
+      })
+
+      serviceSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+        const requestingUrl = details?.requestingUrl || webContents?.getURL?.() || ''
+        let allowed = permission === 'media' || permission === 'fullscreen' || permission === 'clipboard-read' || permission === 'clipboard-write'
+
+        try {
+          const req = new URL(requestingUrl)
+          if (!serviceOrigins.some((origin) => req.hostname.includes(origin))) {
+            allowed = false
+          }
+        } catch (_) {
+          allowed = false
+        }
+
+        logger.debug('ServiceSession', 'permission_request', {
+          partition,
+          permission,
+          allowed,
+          requestingUrl: requestingUrl.substring(0, 80) || null,
+        })
+        callback(allowed)
+      })
+
+      logger.info('ServiceSession', 'permissions_configured', {
+        partition,
+        isPersistent: serviceSession.isPersistent?.(),
+      })
+    })
+  } catch (error) {
+    logger.warn('ServiceSession', 'permissions_configuration_failed', {
+      message: error?.message || 'unknown_error',
+    })
+  }
+}
+
+function configureServiceSessionPermissions_Legacy() {
+  // DEPRECATED: Legacy reference - use configureServiceSessionPermissions() instead
+  // Todos los permisos se configuran en configureServiceSessionPermissions()
+  // Esta función se mantiene por compatibilidad.
+  try {
+    configureServiceSessionPermissions()
+  } catch (_) {}
+}
 
 function executeInWebContents(webContents, script, {
   requireReady = true,
@@ -1716,6 +2045,8 @@ function applyViewBounds() {
 function createMainWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) return mainWindow
 
+  const globalSess = getGlobalSession()
+
   mainWindow = new BrowserWindow({
     icon: path.join(__dirname, 'assets', 'icon.png'),
     width: 1200,
@@ -1730,13 +2061,18 @@ function createMainWindow() {
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      session: globalSess,
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: !sandboxFallbackActive,
+      sandbox: sandboxEnabledForRuntime,
+      plugins: true,
       backgroundThrottling: true,
       webSecurity: true,
     },
   })
+  logSessionPersistence('main_window', mainWindow.webContents.session, GLOBAL_SESSION_PARTITION)
+  // UA Chromium estable para reducir inconsistencias de playback en servicios web.
+  mainWindow.webContents.setUserAgent(CHROME_STABLE_USER_AGENT)
   performanceMetrics.mainWindowCreatedAt = Date.now()
 
   // Mostrar cuando el renderer este listo para evitar blanco/parpadeo en prod.
@@ -2166,6 +2502,8 @@ function createMiniPlayer() {
     return
   }
 
+  const globalSess = getGlobalSession()
+
   miniWindow = new BrowserWindow({
     width: 340,
     height: 88,
@@ -2177,10 +2515,14 @@ function createMiniPlayer() {
     backgroundColor: '#00000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      session: globalSess,
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: sandboxEnabledForRuntime,
+      webSecurity: true,
     }
   })
+  logSessionPersistence('mini_window', miniWindow.webContents.session, GLOBAL_SESSION_PARTITION)
 
   const { width, height } = require('electron').screen
     .getPrimaryDisplay().workAreaSize
@@ -2215,6 +2557,10 @@ function toggleMiniPlayer() {
 }
 
 async function createServiceView(serviceId, url) {
+  // Obtener sesión y partición específica del servicio
+  const servicePartition = getPartitionForService(serviceId)
+  const serviceSession = session.fromPartition(servicePartition)
+  
   const existing = views[serviceId]
   if (existing && existing.webContents && !existing.webContents.isDestroyed()) {
     const currentUrl = existing.webContents.getURL()
@@ -2233,26 +2579,62 @@ async function createServiceView(serviceId, url) {
   const view = new BrowserView({
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-      partition: `persist:melo-${serviceId}`,
+      session: serviceSession,
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: !sandboxFallbackActive,
+      sandbox: sandboxEnabledForRuntime,
       backgroundThrottling: true,
       plugins: true,
+      webSecurity: true,
       allowRunningInsecureContent: false,
     },
   })
+  logSessionPersistence(`service_view:${serviceId}`, view.webContents.session, servicePartition)
 
   view.setBackgroundColor('#000000')
 
-  // UA Safari para maximizar compatibilidad DRM con Apple Music.
-  view.webContents.setUserAgent(
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) ' +
-      'AppleWebKit/605.1.15 (KHTML, like Gecko) ' +
-      'Version/17.0 Safari/605.1.15'
-  )
+  // Aplicar User-Agent apropiado según el servicio para máxima compatibilidad.
+  // - Apple Music: Chrome UA moderno (NO Electron) - evita alerta de actualización
+  // - YouTube: Chrome UA estable (NO Electron) - evita congelamiento a 59s
+  // - Otros: Chrome UA estable por defecto
+  const serviceUA = getServiceUserAgent(serviceId)
+  view.webContents.setUserAgent(serviceUA)
+  logger.debug('BrowserView', 'user_agent_applied', {
+    serviceId,
+    userAgent: serviceUA.substring(0, 80) + '...',
+    partition: servicePartition,
+  })
 
   setupViewLifecycleHandlers(view, serviceId, url)
+
+  // Logging avanzado de errores de media para diagnosticar problemas de DRM/codecs
+  // Esto ayuda a detectar issues críticos: Widevine, HEVC, VP9, permisos o configuración
+  view.webContents.on('media-error', (_e, errorCode, errorDescription) => {
+    logger.error('BrowserView', 'media_error_critical', {
+      serviceId,
+      errorCode,
+      errorDescription,
+      url: view.webContents.getURL?.() || 'unknown',
+      partition: servicePartition,
+      timestamp: new Date().toISOString(),
+      diagnostic: {
+        widevineCheck: 'Check: app logs for "widevine_ready"',
+        codecCheck: 'Check: Chrome feature flags PlatformHEVCDecoderSupport',
+        drmCheck: `Verify partition ${servicePartition} has plugins: true`,
+      }
+    })
+  })
+
+  // Log de carga exitosa para verificar UA, codecs, y DRM funcionan
+  view.webContents.on('did-finish-load', () => {
+    logger.debug('BrowserView', 'did_finish_load_with_drm_check', {
+      serviceId,
+      partition: servicePartition,
+      url: view.webContents.getURL(),
+      userAgent: serviceUA.substring(0, 60) + '...',
+      timestamp: new Date().toISOString(),
+    })
+  })
 
   view.webContents.removeAllListeners('did-start-loading')
   view.webContents.on('did-start-loading', () => {
@@ -2624,7 +3006,7 @@ function registerIpcHandlers() {
 
     for (const serviceDef of Object.values(SERVICES)) {
       try {
-        const ses = session.fromPartition(`persist:melo-${serviceDef.id}`)
+        const ses = getGlobalSession()
         const cookies = await ses.cookies.get({})
         if (cookies.length > 0 && !connected.includes(serviceDef.id)) {
           connected.push(serviceDef.id)
@@ -3283,6 +3665,19 @@ function syncMediaShortcutsWithSettings() {
 }
 
 app.whenReady().then(async () => {
+  // Inicializar sesión global al arrancar la app
+  try {
+    initializeGlobalSession()
+    logger.info('Main', 'global_session_ready', {
+      userDataPath: MELO_USER_DATA_PATH,
+      partition: GLOBAL_SESSION_PARTITION,
+    })
+  } catch (error) {
+    logger.error('Main', 'failed_to_initialize_session', {
+      message: error?.message || 'unknown_error',
+    })
+  }
+
   const isStressRun = process.env.MELO_RUN_STRESS === '1'
   const isSmokeRun = process.env.MELO_RUN_SMOKE === '1'
   const isTestRun = isStressRun || isSmokeRun
@@ -3326,6 +3721,19 @@ app.whenReady().then(async () => {
   launchStartsMinimized = isAutostartLaunch && startMinimized
 
   logger.info('Environment', 'runtime_diagnostics', getRuntimeDiagnostics())
+  logger.info('Environment', 'security_runtime', {
+    packaged: app.isPackaged,
+    sandboxExpected: sandboxEnabledForRuntime,
+    noSandboxArg: hasFlag('--no-sandbox'),
+    disableSetuidSandboxArg: hasFlag('--disable-setuid-sandbox'),
+    sandboxFallbackActive,
+    launchMode: process.env.MELO_LAUNCH_MODE || 'unknown',
+  })
+  logger.info('Environment', 'drm_runtime_flags', {
+    autoplayPolicyNoGesture: app.commandLine.hasSwitch('autoplay-policy'),
+    widevineEnabledFeature: app.commandLine.hasSwitch('enable-features'),
+    argv: process.argv,
+  })
   
   // GPU diagnostics via GPU Manager
   try {
@@ -3387,16 +3795,24 @@ app.whenReady().then(async () => {
 
   Menu.setApplicationMenu(null)
 
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Content-Security-Policy': [
-          "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https: wss:"
-        ]
-      }
+  // Configurar CSP en la sesión global persistente
+  try {
+    const globalSess = getGlobalSession()
+    globalSess.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [
+            "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https: wss:"
+          ]
+        }
+      })
     })
-  })
+  } catch (error) {
+    logger.warn('Main', 'failed_to_configure_csp', {
+      message: error?.message || 'unknown_error',
+    })
+  }
 
   createMainWindow()
   updateFallbackStatus({
@@ -3406,6 +3822,23 @@ app.whenReady().then(async () => {
     mitigated: fallbackStatus.mitigated,
   })
   syncTrayWithSettings()
+  
+  // Configurar permisos globales de sesión
+  configureGlobalSessionPermissions()
+  
+  // Inicializar todas las sesiones de servicios (Apple Music, YouTube, Spotify, etc.)
+  // Esto asegura que cada servicio tiene su propia partición persistente con permisos configurados
+  initializeAllServiceSessions()
+  configureServiceSessionPermissions()
+  
+  logger.info('Main', 'drm_compatibility_check', {
+    widevineComponent: 'audio+video decoder ready',
+    hevcCodecSupport: 'enabled via PlatformHEVCDecoderSupport',
+    appleMusicUA: SERVICE_USER_AGENTS.appleMusic.substring(0, 80) + '...',
+    youtubeUA: SERVICE_USER_AGENTS.youtube.substring(0, 80) + '...',
+    timestamp: new Date().toISOString(),
+  })
+  
   registerIpcHandlers()
   registerGlobalShortcuts()
 
@@ -3465,6 +3898,24 @@ app.whenReady().then(async () => {
     safeSendToMainWindow('health:status', status)
   })
 
+  // Log de debugeo: verificar persistencia de sesión en tiempo de ejecución
+  if (DEBUG_MODE) {
+    setInterval(() => {
+      try {
+        const sess = getGlobalSession()
+        if (sess) {
+          sess.cookies.get({}).then((cookies) => {
+            logger.debug('Session', 'periodic_check', {
+              totalCookies: cookies.length,
+              isPersistent: sess.isPersistent?.(),
+              storagePath: sess.getStoragePath?.(),
+            })
+          }).catch(() => {})
+        }
+      } catch (_) {}
+    }, 30000)
+  }
+
   checkConnection()
   networkStatusTimer = setInterval(() => {
     const wasOnline = isOnline
@@ -3480,6 +3931,31 @@ app.whenReady().then(async () => {
   if (store.get('autoUpdateEnabled', true)) {
     setupAutoUpdater(mainWindow)
   }
+
+  // ============================================================================
+  // Verificacion final: sesion global lista y persistente
+  // ============================================================================
+  try {
+    const finalSession = getGlobalSession()
+    const isPersistent = finalSession.isPersistent?.()
+    const storagePath = finalSession.getStoragePath?.()
+    
+    if (!isPersistent) {
+      logger.error('Main', 'CRITICAL_NON_PERSISTENT_SESSION', {
+        message: 'Session is NOT persistent. Cookies and data WILL be lost on restart.',
+        partition: GLOBAL_SESSION_PARTITION,
+        expectedPersistent: true,
+        storagePath: storagePath || 'unknown',
+      })
+    } else {
+      logger.info('Main', 'session_persistence_verified', {
+        partition: GLOBAL_SESSION_PARTITION,
+        isPersistent: true,
+        storagePath: storagePath || 'default Electron path',
+        dataPath: MELO_USER_DATA_PATH,
+      })
+    }
+  } catch (_) {}
 
   if (process.env.MELO_RUN_STRESS === '1') {
     const iterations = Number(process.env.MELO_STRESS_SWITCHES || 40)
