@@ -164,6 +164,7 @@ Reglas clave del pipeline:
    - marca `DEBUG_BUILD=true`
    - bloquea publicacion de produccion
 9. Solo publica release si castLabs fue exitoso.
+10. Publicacion idempotente: build + upload de artefactos a release con `softprops/action-gh-release`.
 
 Workflow opcional de debug:
 
