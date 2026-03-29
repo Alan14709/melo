@@ -1,6 +1,6 @@
 # Melo
 
-![Version](https://img.shields.io/badge/version-v1.5.0-success)
+![Version](https://img.shields.io/badge/version-v1.5.2-success)
 ![Downloads](https://img.shields.io/badge/downloads-see%20releases-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux-blue)
 ![Stack](https://img.shields.io/badge/stack-Electron%20%2B%20React%20%2B%20Vite-black)
@@ -21,10 +21,19 @@ El proyecto esta orientado a experiencia de escritorio real y estabilidad operat
 
 ## Estado del proyecto
 
-- Version objetivo de release: v1.5.0
+- Version actual de release: v1.5.2
 - Plataforma soportada: Linux
 - Build targets: AppImage y DEB
-- Estado: listo para QA final de release
+- Estado: publicado en produccion
+
+## Novedades v1.5.2
+
+- Sistema de feedback UX con toasts en cola, autocierre y animaciones.
+- Logger centralizado para trazabilidad de errores y eventos de UI.
+- Mejoras de accesibilidad WCAG 2.1 AA (focus-visible, etiquetas ARIA y soporte semantic HTML).
+- Respeto de `prefers-reduced-motion` para experiencia accesible.
+- Refinamientos de estabilidad Linux en MPRIS, deduplicacion de eventos y hardening de metadata.
+- Flujo de release automatizado por tags `v*` via GitHub Actions.
 
 ## Stack tecnico
 
