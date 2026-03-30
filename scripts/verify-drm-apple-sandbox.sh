@@ -22,7 +22,7 @@ run_electron_js() {
   script_path="$(mktemp "${TMPDIR:-/tmp}/melo-${test_name}-XXXXXX.js")"
   cat > "${script_path}"
 
-  local -a cmd=(npx electron "${script_path}")
+  local -a cmd=(npx electron --no-sandbox --disable-setuid-sandbox "${script_path}")
   if command -v xvfb-run >/dev/null 2>&1; then
     cmd=(xvfb-run -a "${cmd[@]}")
   elif [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
