@@ -96,6 +96,6 @@
       "afterInstall": "packaging/deb-after-install.sh",
       "afterRemove": "packaging/deb-after-remove.sh"
     },
-    "electronVersion": "28.2.10+wvcus"
+    "electronVersion": "40.7.0+wvcus"
   }
 }
