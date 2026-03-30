@@ -78,6 +78,18 @@ jobs:
           echo "::error::Production release blocked because DEBUG_BUILD=true"
           exit 1
 
+      - name: Verify DRM, Apple UA and sandbox gate
+        if: steps.castlabs_install.outputs.install_mode == 'castlabs'
+        env:
+          MELO_SANDBOX_STRICT: "0"
+          MELO_APPLE_UA_REQUIRE_MAC: "0"
+          MELO_REQUIRE_APPLE_AUTH_COOKIE: "0"
+          MELO_RELEASE_GATE_AUTO_FIX_SANDBOX: "0"
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/verify-drm-apple-sandbox.sh
+
       - name: Delete existing release for current tag
         if: steps.castlabs_install.outputs.install_mode == 'castlabs'
         env:
@@ -86,7 +98,7 @@ jobs:
         run: |
           set -euo pipefail
           API_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}"
-          RELEASE_ID="$(curl -sS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "${API_URL}/releases/tags/${GITHUB_REF_NAME}" | jq -r '.id // empty')"
+          RELEASE_ID="$(curl -sS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "${API_URL}/releases?per_page=100" | jq -r --arg TAG "${GITHUB_REF_NAME}" '.[] | select(.tag_name == $TAG) | .id' | head -n1)"
           if [[ -n "${RELEASE_ID}" ]]; then
             echo "Deleting existing release id ${RELEASE_ID} for ${GITHUB_REF_NAME}"
             curl -sS -X DELETE -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "${API_URL}/releases/${RELEASE_ID}" >/dev/null

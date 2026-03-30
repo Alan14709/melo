@@ -5,7 +5,7 @@
   "author": "Melo Maintainers",
   "main": "main.js",
   "scripts": {
-    "dev": "pkill -f \"[e]lectron/dist/electron\" >/dev/null 2>&1 || true; fuser -k 5173/tcp; concurrently \"vite\" \"wait-on tcp:5173 && node scripts/electron-launcher.js .\"",
+    "dev": "bash scripts/install-castlabs-electron.sh && pkill -f \"[e]lectron/dist/electron\" >/dev/null 2>&1 || true; fuser -k 5173/tcp; concurrently \"vite\" \"wait-on tcp:5173 && node scripts/electron-launcher.js .\"",
     "dev:sandbox-fallback": "pkill -f \"[e]lectron/dist/electron\" >/dev/null 2>&1 || true; fuser -k 5173/tcp; concurrently \"vite\" \"wait-on tcp:5173 && node scripts/electron-launcher.js . --melo-no-sandbox-fallback --no-sandbox --disable-setuid-sandbox\"",
     "prebuild": "node -e \"require('fs').mkdirSync('dist/renderer', {recursive:true})\"",
     "build": "vite build && electron-builder",
@@ -17,10 +17,15 @@
     "test:syntax": "node --check main.js && node --check preload.js && node --check services/RetryManager.js && node --check services/HealthMonitor.js",
     "test:stress": "node scripts/stress-test.js",
     "test:smoke": "node scripts/e2e-smoke.js",
+    "test:release-gate": "bash scripts/verify-drm-apple-sandbox.sh",
     "postinstall": "electron-builder install-app-deps",
     "release:linux": "vite build && npx electron-builder --linux",
     "prerelease:publish": "node -e \"require('fs').mkdirSync('dist/renderer', {recursive:true})\"",
-    "release:publish": "vite build && npx electron-builder --linux --publish always"
+    "release:publish": "vite build && npx electron-builder --linux --publish always",
+    "install:widevine": "bash scripts/install-castlabs-electron.sh",
+    "validate:drm": "bash scripts/verify-drm-apple-sandbox.sh",
+    "build:drm": "bash scripts/install-castlabs-electron.sh && npm run build",
+    "release:linux:drm": "bash scripts/install-castlabs-electron.sh && npm run release:linux"
   },
   "dependencies": {
     "dbus-next": "^0.10.2",
@@ -33,7 +38,7 @@
     "cmdk": "^0.2.0",
     "concurrently": "^8.0.0",
     "cross-env": "^7.0.3",
-    "electron": "30.3.1",
+    "electron": "https://github.com/castlabs/electron-releases#v40.7.0+wvcus",
     "electron-builder": "^24.0.0",
     "lucide-react": "^0.383.0",
     "react": "^18.2.0",
@@ -90,6 +95,7 @@
     "deb": {
       "afterInstall": "packaging/deb-after-install.sh",
       "afterRemove": "packaging/deb-after-remove.sh"
-    }
+    },
+    "electronVersion": "28.2.10+wvcus"
   }
 }

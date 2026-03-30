@@ -149,6 +149,17 @@ fi
 ok "Dependencies installed (Electron: $ELECTRON_VERSION)"
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 6.5 RELEASE GATE - DRM + Apple UA + Sandbox
+# ═══════════════════════════════════════════════════════════════════════════
+log "6.5/9: Running release gate (Widevine + Apple UA + sandbox)..."
+
+if ! npm run test:release-gate; then
+  err "Release gate failed - blocking release"
+fi
+
+ok "Release gate passed"
+
+# ═══════════════════════════════════════════════════════════════════════════
 # 7. BUILD
 # ═══════════════════════════════════════════════════════════════════════════
 log "7/9: Building application..."

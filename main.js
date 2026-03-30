@@ -165,7 +165,7 @@ const CHROME_STABLE_USER_AGENT =
 // User-Agent optimizado por servicio - evita detección de Electron para máxima compatibilidad DRM
 const SERVICE_USER_AGENTS = {
   // Apple Music: Chrome UA moderno - Apple Music rechaza Safari antiguo y requiere Chrome moderno
-  appleMusic: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+  appleMusic: CHROME_STABLE_USER_AGENT,
   // YouTube: Chrome UA estable - probado para evitar el congelamiento a los 59 segundos
   youtube: CHROME_STABLE_USER_AGENT,
   // Servicios por defecto: Chrome estable
