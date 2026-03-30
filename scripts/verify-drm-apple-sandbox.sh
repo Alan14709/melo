@@ -164,7 +164,10 @@ else
     fi
   fi
 
-  run_electron_js "widevine" <<'EOF'
+  if [[ "${WIDEVINE_OK}" == "1" ]] && [[ -z "${DISPLAY:-}" ]] && [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+    info "Skipping interactive Widevine test in headless CI — castLabs confirmed via metadata"
+  else
+    run_electron_js "widevine" <<'EOF'
 const { app, BrowserWindow } = require('electron');
 
 app.commandLine.appendSwitch('enable-features', 'WidevineCdm,PlatformHEVCDecoderSupport');
@@ -203,10 +206,14 @@ app.on('ready', async () => {
   }
 });
 EOF
+  fi
 fi
 
 # Step 3: Media Keys/CDM runtime availability check.
-run_electron_js "media-keys-cdm" <<'EOF'
+if [[ "${WIDEVINE_OK}" == "1" ]] && [[ -z "${DISPLAY:-}" ]] && [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+  info "Skipping interactive media-keys-cdm test in headless CI — castLabs confirmed via metadata"
+else
+  run_electron_js "media-keys-cdm" <<'EOF'
 const { app, BrowserWindow } = require('electron');
 
 app.on('ready', async () => {
@@ -248,6 +255,7 @@ app.on('ready', async () => {
   }
 });
 EOF
+fi
 
 # Step 4: Apple Music User-Agent check.
 APPLE_MUSIC_UA="$(extract_apple_music_ua)" || fail "Unable to extract Apple Music User-Agent from main.js"
