@@ -61,7 +61,7 @@ try_github_version() {
       
       set_output "install_mode" "castlabs"
       set_output "selected_castlabs_version" "${tag}"
-      set_output "selected_electron_version" "${version}"
+      set_output "selected_electron_version" "${tag}"
       set_output "selected_custom_dir" "${tag}"
       set_env "DEBUG_BUILD" "false"
       set_env "ELECTRON_WVCUS_VERSION" "${tag}"
@@ -95,7 +95,7 @@ main() {
     version=$(cat node_modules/electron/package.json | grep '"version"' | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
     log "✅ castLabs ${version} ya presente — nada que hacer"
     set_output "install_mode" "castlabs"
-    set_output "selected_electron_version" "${version}"
+    set_output "selected_electron_version" "${tag}"
     set_env "DEBUG_BUILD" "false"
     exit 0
   fi
