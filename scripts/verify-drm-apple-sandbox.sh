@@ -50,22 +50,21 @@ run_electron_js() {
 }
 
 extract_apple_music_ua() {
-  node -e '
-    const fs = require("fs");
-    const content = fs.readFileSync(process.argv[1], "utf8");
-    // Intenta match literal primero, luego referencia a variable
-    let match = content.match(/appleMusic\s*:\s*'([^']+)'/m);
+  node -e "
+    const fs = require('fs');
+    const content = fs.readFileSync(process.argv[1], 'utf8');
+    let match = content.match(/appleMusic\\s*:\\s*'([^']+)'/m);
     if (!match) {
-      const varMatch = content.match(/appleMusic\s*:\s*(\w+)/m);
+      const varMatch = content.match(/appleMusic\\s*:\\s*(\\w+)/m);
       if (varMatch) {
         const varName = varMatch[1];
-        const varValue = content.match(new RegExp("const " + varName + "\\s*=\\s*'([^']+)'"));
+        const varValue = content.match(new RegExp('const ' + varName + '\\\\s*=\\\\s*\'([^\']+)\''));
         if (varValue) match = varValue;
       }
     }
     if (!match) process.exit(2);
     process.stdout.write(match[1]);
-  ' "${ROOT_DIR}/main.js"
+  " "${ROOT_DIR}/main.js"
 }
 
 info "Starting Melo release gate (DRM + Apple UA + Media Keys/CDM + sandbox + cookies)"
