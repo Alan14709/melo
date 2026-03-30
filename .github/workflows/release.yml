@@ -12,7 +12,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
-      APP_VERSION: 1.6.3
+      APP_VERSION: 1.6.4
 
     steps:
       - uses: actions/checkout@v4
