@@ -53,15 +53,8 @@ extract_apple_music_ua() {
   node -e "
     const fs = require('fs');
     const content = fs.readFileSync(process.argv[1], 'utf8');
-    let match = content.match(/appleMusic\\s*:\\s*'([^']+)'/m);
-    if (!match) {
-      const varMatch = content.match(/appleMusic\\s*:\\s*(\\w+)/m);
-      if (varMatch) {
-        const varName = varMatch[1];
-        const varValue = content.match(new RegExp('const ' + varName + '\\\\s*=\\\\s*\'([^\']+)\''));
-        if (varValue) match = varValue;
-      }
-    }
+    // Extraer CHROME_STABLE_USER_AGENT directo
+    const match = content.match(/const CHROME_STABLE_USER_AGENT\s*=\s*'([^']+)'/m);
     if (!match) process.exit(2);
     process.stdout.write(match[1]);
   " "${ROOT_DIR}/main.js"
