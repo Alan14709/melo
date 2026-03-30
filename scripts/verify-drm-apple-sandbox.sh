@@ -53,7 +53,16 @@ extract_apple_music_ua() {
   node -e '
     const fs = require("fs");
     const content = fs.readFileSync(process.argv[1], "utf8");
-    const match = content.match(/SERVICE_USER_AGENTS\s*=\s*\{[\s\S]*?appleMusic\s*:\s*\x27([^\x27]+)\x27/m);
+    // Intenta match literal primero, luego referencia a variable
+    let match = content.match(/appleMusic\s*:\s*'([^']+)'/m);
+    if (!match) {
+      const varMatch = content.match(/appleMusic\s*:\s*(\w+)/m);
+      if (varMatch) {
+        const varName = varMatch[1];
+        const varValue = content.match(new RegExp("const " + varName + "\\s*=\\s*'([^']+)'"));
+        if (varValue) match = varValue;
+      }
+    }
     if (!match) process.exit(2);
     process.stdout.write(match[1]);
   ' "${ROOT_DIR}/main.js"
