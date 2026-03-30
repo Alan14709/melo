@@ -136,13 +136,31 @@ SKIP_WIDEVINE_CHECK="${MELO_SKIP_WIDEVINE_LOCAL_CHECK:-0}"
 if [[ "${SKIP_WIDEVINE_CHECK}" == "1" ]]; then
   info "Widevine check skipped (local development mode)"
 else
-  if [[ ! -f "${ROOT_DIR}/node_modules/electron/dist/libwidevinecdm.so" ]]; then
+  # Widevine check: acepta libwidevinecdm.so (env vars method) O castLabs via GitHub URL
+  WIDEVINE_SO="${ROOT_DIR}/node_modules/electron/dist/libwidevinecdm.so"
+  ELECTRON_PKG="${ROOT_DIR}/node_modules/electron/package.json"
+
+  WIDEVINE_OK=0
+  if [[ -f "${WIDEVINE_SO}" ]]; then
+    info "Widevine library found: ${WIDEVINE_SO}"
+    WIDEVINE_OK=1
+  elif [[ -f "${ELECTRON_PKG}" ]]; then
+    # Try to detect castLabs via package.json metadata
+    ELECTRON_RESOLVED="$(node -e "process.stdout.write(require('${ELECTRON_PKG}')._resolved || '')" 2>/dev/null || true)"
+    ELECTRON_VERSION="$(node -e "process.stdout.write(require('${ELECTRON_PKG}').version || '')" 2>/dev/null || true)"
+    if echo "${ELECTRON_RESOLVED}${ELECTRON_VERSION}" | grep -qi "castlabs\|wvcus"; then
+      info "castLabs Electron detected via package metadata (v${ELECTRON_VERSION}) — Widevine bundled at runtime"
+      WIDEVINE_OK=1
+    fi
+  fi
+
+  if [[ "${WIDEVINE_OK}" != "1" ]]; then
     if [[ -z "${GITHUB_ACTIONS:-}" ]]; then
       warn "Widevine library not found locally. In local dev, you can use: export MELO_SKIP_WIDEVINE_LOCAL_CHECK=1"
       warn "Note: Widevine will be downloaded at runtime when castLabs is properly initialized"
-      fail "Widevine library not found: node_modules/electron/dist/libwidevinecdm.so"
+      fail "Widevine library not found: node_modules/electron/dist/libwidevinecdm.so (and castLabs not detected)"
     else
-      fail "Widevine library not found in CI: node_modules/electron/dist/libwidevinecdm.so"
+      fail "Widevine library not found in CI: node_modules/electron/dist/libwidevinecdm.so AND castLabs not detected in package.json"
     fi
   fi
 
