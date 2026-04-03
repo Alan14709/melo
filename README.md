@@ -10,11 +10,11 @@ Melo es una app de escritorio Linux para musica en streaming sobre Electron, con
 
 ## Version actual
 
-- Release estable: **v1.6.3**
+- Release estable: **v1.6.4**
 - Targets Linux: **AppImage** y **DEB**
 - CI/CD: GitHub Actions con publicacion automatica por tag
 
-## Novedades v1.6.3
+## Novedades v1.6.4
 
 - Pipeline de release reforzado para castLabs (WVCUS) con fallback por versiones.
 - Instalacion robusta de Electron con limpieza total por intento.
