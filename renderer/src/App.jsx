@@ -12,10 +12,12 @@ import UpdateBanner from './components/UpdateBanner.jsx'
 import OfflineBanner from './components/OfflineBanner.jsx'
 import FallbackControls from './components/FallbackControls.jsx'
 import ToastManager from './components/ToastManager.jsx'
+import ArtworkGradient from './components/ArtworkGradient.jsx'
 import { getUISafeMode } from './hooks/useUISafeMode'
 import { SERVICES } from '../../services/registry'
 import { extractPalette } from './utils/colorExtractor'
 import { applyTheme, applyDynamicPalette } from './utils/applyTheme'
+import './styles/artwork-gradient.css'
 
 export default function App() {
   const didInitLastServiceRef = useRef(false)
@@ -359,7 +361,8 @@ export default function App() {
   ), [fallbackStatus, healthStatus])
 
   return (
-    <div className={`app-root ${uiSafe.isSafeMode ? 'safe-mode' : ''}`}>
+    <div className={`app-root ${uiSafe.isSafeMode ? 'safe-mode' : ''}`} style={{ position: 'relative', zIndex: 1 }}>
+      <ArtworkGradient opacity={0.6} />
       <ToastManager />
 
       {currentView === 'picker' && (
