@@ -7,9 +7,10 @@
 import React, { useEffect, useRef, useState, memo } from 'react'
 import { usePlayerStore } from '../store/usePlayerStore'
 import { extractColors, hexToRgba, darkenColor } from '../utils/extractColors'
+import { applyDynamicAccent } from '../utils/applyTheme'
 
 const ArtworkGradient = memo(function ArtworkGradient({ opacity = 1 }) {
-  const { currentTrack, isPlaying } = usePlayerStore()
+  const { currentTrack, isPlaying, dynamicThemeEnabled, setAccentColor } = usePlayerStore()
   const artwork = currentTrack?.artwork || currentTrack?.artworkUrl || null
 
   const [colors, setColors] = useState({
@@ -28,14 +29,20 @@ const ArtworkGradient = memo(function ArtworkGradient({ opacity = 1 }) {
     extractColors(artwork, 24).then(({ vibrant, dominant, muted, palette }) => {
       setTransitioning(true)
       setColors({
-        c1: darkenColor(vibrant, 0.45),
-        c2: darkenColor(dominant, 0.55),
-        c3: darkenColor(muted, 0.35),
-        c4: darkenColor(palette[1] || dominant, 0.5),
+        c1: darkenColor(vibrant, 0.25),
+        c2: darkenColor(dominant, 0.35),
+        c3: darkenColor(muted, 0.20),
+        c4: darkenColor(palette[1] || dominant, 0.30),
       })
+
+      // Actualizar accent con color vibrante del artwork si el tema dinamico esta habilitado.
+      if (dynamicThemeEnabled) {
+        applyDynamicAccent(vibrant)
+        setAccentColor(vibrant)
+      }
       setTimeout(() => setTransitioning(false), 1200)
     })
-  }, [artwork])
+  }, [artwork, dynamicThemeEnabled, setAccentColor])
 
   return (
     <div
@@ -58,6 +65,7 @@ const ArtworkGradient = memo(function ArtworkGradient({ opacity = 1 }) {
       <div
         className="artwork-gradient-layer layer-float"
         style={{
+          opacity: 0.9,
           background: `
             radial-gradient(ellipse 70% 50% at 70% 70%, ${hexToRgba(colors.c4, 0.6)} 0%, transparent 60%),
             radial-gradient(ellipse 50% 70% at 30% 30%, ${hexToRgba(colors.c1, 0.5)} 0%, transparent 55%)
