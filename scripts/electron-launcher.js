@@ -148,11 +148,23 @@ function isEarlyCrash(runtimeMs) {
   return Number(runtimeMs || 0) <= EARLY_CRASH_WINDOW_MS
 }
 
-function shouldRetryWithSandboxFallback({ code, signal, args, runtimeMs, sandboxStatus, launchMode }) {
+function isZygoteFailure(stderr = '') {
+  const text = String(stderr || '')
+  return text.includes('zygote_host_impl_linux')
+    || text.includes('Argumento inválido')
+    || text.includes('Invalid argument')
+    || text.includes('Check failed:')
+}
+
+function shouldRetryWithSandboxFallback({ code, signal, args, runtimeMs, sandboxStatus, launchMode, stderr }) {
   if (process.platform !== 'linux') return false
   if (launchMode === 'packaged') return false
   if (hasNoSandboxArgs(args)) return false
   if (!isEarlyCrash(runtimeMs)) return false
+
+  // Detectar fallo de zygote por namespace restrictions (AppArmor/Ubuntu 23.10+).
+  // Aunque el helper sea usable (root+setuid), forzamos fallback a no-sandbox en dev.
+  if (isZygoteFailure(stderr)) return true
 
   // Lógica original: fallback de sandbox cuando helper no es usable.
   if (sandboxStatus?.usable !== false) return false
@@ -184,20 +196,27 @@ function buildSoftwareFallbackArgs(baseArgs) {
 function spawnElectron(electronBinary, args, extraEnv = {}) {
   return new Promise((resolve) => {
     const startedAt = Date.now()
+    let stderr = ''
     const child = spawn(electronBinary, args, {
-      stdio: 'inherit',
+      stdio: ['inherit', 'inherit', 'pipe'],
       env: {
         ...process.env,
         ...extraEnv,
       },
     })
 
+    child.stderr.on('data', (chunk) => {
+      const text = String(chunk || '')
+      stderr += text
+      process.stderr.write(chunk)
+    })
+
     child.on('exit', (code, signal) => {
-      resolve({ code, signal, runtimeMs: Date.now() - startedAt })
+      resolve({ code, signal, stderr, runtimeMs: Date.now() - startedAt })
     })
 
     child.on('error', (error) => {
-      resolve({ code: 1, signal: null, error: error.message, runtimeMs: Date.now() - startedAt })
+      resolve({ code: 1, signal: null, error: error.message, stderr, runtimeMs: Date.now() - startedAt })
     })
   })
 }
@@ -259,7 +278,12 @@ async function main() {
     runtimeMs: result.runtimeMs,
     sandboxStatus,
     launchMode,
+    stderr: result.stderr,
   })) {
+    if (isZygoteFailure(result.stderr)) {
+      console.warn('[MeloLauncher] Zygote namespace failure detected, retrying with --no-sandbox')
+    }
+
     const retryBaseArgs = stripConflictingGpuArgs(stripResetArgs(currentArgs))
       .filter((arg) => arg !== '--melo-namespace-sandbox-fallback')
     currentArgs = [...retryBaseArgs]
