@@ -362,7 +362,7 @@ export default function App() {
 
   return (
     <div className={`app-root ${uiSafe.isSafeMode ? 'safe-mode' : ''}`} style={{ position: 'relative', zIndex: 1 }}>
-      <ArtworkGradient opacity={0.6} />
+      <ArtworkGradient opacity={0.85} />
       <ToastManager />
 
       {currentView === 'picker' && (
