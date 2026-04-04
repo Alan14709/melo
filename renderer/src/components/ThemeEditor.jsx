@@ -84,14 +84,14 @@ export default function ThemeEditor({ onClose }) {
 
   const FIELDS = [
     { key: '--bg-base', label: 'Fondo principal', type: 'color' },
-    { key: '--bg-sidebar', label: 'Fondo sidebar', type: 'color' },
-    { key: '--bg-topbar', label: 'Fondo topbar', type: 'color' },
-    { key: '--bg-playerbar', label: 'Fondo playerbar', type: 'color' },
-    { key: '--bg-card', label: 'Fondo cards', type: 'color' },
+    { key: '--bg-sidebar', label: 'Degradado UI - inicio', type: 'color' },
+    { key: '--bg-topbar', label: 'Degradado UI - medio', type: 'color' },
+    { key: '--bg-playerbar', label: 'Degradado UI - fin', type: 'color' },
+    { key: '--bg-card', label: 'Superficie cards', type: 'color' },
     { key: '--accent', label: 'Color accent', type: 'color' },
     { key: '--text-primary', label: 'Texto principal', type: 'color' },
-    { key: '--text-secondary', label: 'Texto secundario', type: 'color' },
-    { key: '--border', label: 'Color bordes', type: 'color' },
+    { key: '--text-secondary', label: 'Texto secundario', type: 'text' },
+    { key: '--border', label: 'Color bordes', type: 'text' },
   ]
 
   return (
@@ -112,16 +112,36 @@ export default function ThemeEditor({ onClose }) {
       </div>
 
       <div className="theme-editor-fields">
+        <div className="theme-editor-preview">
+          <div
+            className="theme-editor-preview-hero"
+            style={{
+              background: `linear-gradient(145deg, ${values['--bg-sidebar'] || '#141414'} 0%, ${values['--bg-topbar'] || '#111111'} 52%, ${values['--bg-playerbar'] || '#111111'} 100%)`,
+            }}
+          >
+            <div className="theme-editor-preview-card" style={{ background: values['--bg-card'] || '#1c1c1e' }}>
+              <span className="preview-title" style={{ color: values['--text-primary'] || '#ffffff' }}>
+                Vista previa del degradado
+              </span>
+              <span className="preview-subtitle" style={{ color: values['--text-secondary'] || 'rgba(255,255,255,0.55)' }}>
+                Ajusta inicio, medio y fin para personalizar el tema custom.
+              </span>
+            </div>
+          </div>
+        </div>
+
         {FIELDS.map(({ key, label }) => (
           <div key={key} className="theme-field">
             <label className="theme-field-label">{label}</label>
             <div className="theme-field-control">
-              <input
-                type="color"
-                value={values[key]?.startsWith('#') ? values[key] : '#ffffff'}
-                onChange={(e) => handleChange(key, e.target.value)}
-                className="color-picker"
-              />
+              {key !== '--text-secondary' && key !== '--border' && (
+                <input
+                  type="color"
+                  value={values[key]?.startsWith('#') ? values[key] : '#ffffff'}
+                  onChange={(e) => handleChange(key, e.target.value)}
+                  className="color-picker"
+                />
+              )}
               <input
                 type="text"
                 value={values[key] || ''}

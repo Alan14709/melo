@@ -447,8 +447,8 @@ export default function SettingsPanel({ isOpen, onClose }) {
         </header>
 
         <div className="settings-content">
-          <section>
-            <h3>SERVICIOS <span className="badge-version">v0.2</span></h3>
+          <section className="settings-section-card">
+            <h3 className="settings-section-title">SERVICIOS <span className="badge-version">v0.2</span></h3>
             <button className="settings-btn-secondary" onClick={handleSwitchToPicker}>
               Cambiar servicio
             </button>
@@ -471,8 +471,8 @@ export default function SettingsPanel({ isOpen, onClose }) {
             })}
           </section>
 
-          <section>
-            <h3>DISCORD <span className="badge-version">v0.3</span></h3>
+          <section className="settings-section-card">
+            <h3 className="settings-section-title">DISCORD <span className="badge-version">v0.3</span></h3>
             <SettingsRow label="Rich Presence" type="toggle" value={discordEnabled} onChange={handleDiscordToggle} />
             {discordEnabled && (
               <>
@@ -499,8 +499,8 @@ export default function SettingsPanel({ isOpen, onClose }) {
             </p>
           </section>
 
-          <section>
-            <h3>LAST.FM <span className="badge-version">v0.3</span></h3>
+          <section className="settings-section-card">
+            <h3 className="settings-section-title">LAST.FM <span className="badge-version">v0.3</span></h3>
             <SettingsRow label="Scrobbling" type="toggle" value={lastfmEnabled} onChange={handleLfmToggle} />
             {lastfmEnabled && (
               <div className="lfm-flow">
@@ -554,13 +554,13 @@ export default function SettingsPanel({ isOpen, onClose }) {
             )}
           </section>
 
-          <section>
-            <h3>NOTIFICACIONES <span className="badge-version">v0.3</span></h3>
+          <section className="settings-section-card">
+            <h3 className="settings-section-title">NOTIFICACIONES <span className="badge-version">v0.3</span></h3>
             <SettingsRow label="Notificaciones de cancion" type="toggle" value={notificationsEnabled} onChange={handleNotificationsToggle} />
           </section>
 
-          <section>
-            <h3>SISTEMA</h3>
+          <section className="settings-section-card">
+            <h3 className="settings-section-title">SISTEMA</h3>
             <SettingsRow
               label="Atajos multimedia (teclas de reproduccion)"
               type="toggle"
@@ -607,17 +607,18 @@ export default function SettingsPanel({ isOpen, onClose }) {
             />
           </section>
 
-          <section>
-            <h3>APARIENCIA</h3>
+          <section className="settings-section-card">
+            <h3 className="settings-section-title">APARIENCIA</h3>
             <SettingsRow label="Tema" type="text" value={theme.toUpperCase()} />
             <div className="theme-grid">
               {THEMES.map((id) => (
                 <button
                   key={id}
-                  className={`theme-btn ${theme === id ? 'active' : ''}`}
+                  className={`theme-btn theme-btn-${id} ${theme === id ? 'active' : ''}`}
                   onClick={() => handleThemeChange(id)}
                 >
-                  {id}
+                  <span className="theme-btn-swatch" aria-hidden="true" />
+                  <span className="theme-btn-label">{id}</span>
                 </button>
               ))}
             </div>
@@ -637,10 +638,13 @@ export default function SettingsPanel({ isOpen, onClose }) {
                 }
               }}
             />
+            <p className="theme-dynamic-note">
+              Al desactivar el dinamico, se recupera tu tema seleccionado.
+            </p>
           </section>
 
-          <section>
-            <h3>MODO INMERSIVO</h3>
+          <section className="settings-section-card">
+            <h3 className="settings-section-title">MODO INMERSIVO</h3>
             <SettingsRow
               label="Modo inmersivo"
               sublabel="Oculta la barra lateral para maximizar el contenido"
@@ -675,28 +679,28 @@ export default function SettingsPanel({ isOpen, onClose }) {
             </div>
           </section>
 
-          <section>
-            <h3>ATAJOS</h3>
+          <section className="settings-section-card">
+            <h3 className="settings-section-title">ATAJOS</h3>
             <SettingsRow label="Cmd+K Command Palette" badge="v0.4" type="shortcut" value="Cmd/Ctrl+K" />
             <SettingsRow label="MediaPlayPause" type="shortcut" value="MediaPlayPause" />
             <SettingsRow label="MediaNext / MediaPrev" type="shortcut" value="MediaNextTrack / MediaPreviousTrack" />
           </section>
 
-          <section>
-            <h3>ESTADISTICAS <span className="badge-version">v0.5</span></h3>
+          <section className="settings-section-card">
+            <h3 className="settings-section-title">ESTADISTICAS <span className="badge-version">v0.5</span></h3>
             <SettingsRow label="Guardar historial" type="toggle" value={statsEnabled} onChange={handleStatsToggle} />
             <SettingsRow label="Exportar datos" type="button" onChange={handleExport} />
             <SettingsRow label="Borrar estadisticas" type="button" buttonText="Borrar" onChange={handleClearStats} />
           </section>
 
-          <section>
-            <h3>ACTUALIZACIONES <span className="badge-version">v1.0</span></h3>
+          <section className="settings-section-card">
+            <h3 className="settings-section-title">ACTUALIZACIONES <span className="badge-version">v1.0</span></h3>
             <SettingsRow label="Version" type="text" value={`v${version}`} />
             <SettingsRow label="Auto-update" type="toggle" value={autoUpdateEnabled} onChange={handleAutoUpdateToggle} />
           </section>
 
-          <section>
-            <h3>SERVICIOS CONECTADOS</h3>
+          <section className="settings-section-card">
+            <h3 className="settings-section-title">SERVICIOS CONECTADOS</h3>
             {Object.values(SERVICES).map((service) => {
               const isConnected = connectedServices.includes(service.id)
               return (

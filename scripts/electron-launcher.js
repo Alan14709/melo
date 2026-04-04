@@ -20,6 +20,7 @@ const CONFLICTING_GPU_FLAGS = new Set([
 function detectRuntimeContext() {
   const sessionType = process.env.XDG_SESSION_TYPE || 'unknown'
   const isWayland = Boolean(process.env.WAYLAND_DISPLAY || sessionType === 'wayland')
+  const isXWayland = Boolean(isWayland && process.env.DISPLAY)
   const isX11 = Boolean(process.env.DISPLAY) && !isWayland
   const gpuVendor = fs.existsSync('/proc/driver/nvidia/version') ? 'nvidia' : 'unknown'
 
@@ -27,6 +28,7 @@ function detectRuntimeContext() {
     platform: process.platform,
     sessionType,
     isWayland,
+    isXWayland,
     isX11,
     gpuVendor,
   }
@@ -101,23 +103,61 @@ function detectLaunchMode(baseArgs) {
   return 'packaged'
 }
 
-function buildArgs(baseArgs, sandboxStatus, launchMode) {
-  const args = [...baseArgs]
+function tryFixSandboxPermissions(helperPath, launchMode) {
+  const isDev = launchMode === 'development'
+    || process.env.NODE_ENV === 'development'
+    || process.env.MELO_DEV_MODE === '1'
+
+  if (process.platform !== 'linux' || !isDev || !helperPath) return false
+
+  try {
+    const stat = fs.statSync(helperPath)
+    const ownerUid = Number(stat.uid)
+    const hasSetuid = Boolean(stat.mode & 0o4000)
+
+    if (ownerUid !== 0 || !hasSetuid) {
+      console.warn('[MeloLauncher] Sandbox helper lost permissions. Run: '
+        + `sudo chown root:root ${helperPath} && sudo chmod 4755 ${helperPath}`)
+      return false
+    }
+
+    return true
+  } catch {
+    return false
+  }
+}
+
+function buildArgs(baseArgs, sandboxStatus, launchMode, runtime) {
+  let args = [...baseArgs]
   const isPackaged = launchMode === 'packaged'
-  const hasNoSandbox = args.includes('--no-sandbox')
-  const hasSetuidDisable = args.includes('--disable-setuid-sandbox')
-  const hasSandboxFlag = args.includes('--melo-no-sandbox-fallback')
 
   // En produccion no permitimos no-sandbox ni disable-setuid-sandbox.
   if (isPackaged) {
     return args.filter((arg) => arg !== '--no-sandbox' && arg !== '--disable-setuid-sandbox')
   }
 
-  if (!sandboxStatus.usable) {
-    // Prefer namespace sandbox fallback first; do not force --no-sandbox at startup.
+  const isLinux = process.platform === 'linux'
+  const isNvidia = runtime?.gpuVendor === 'nvidia'
+  const sandboxInvalid = !sandboxStatus?.usable
+
+  if (isLinux && sandboxInvalid) {
     if (!args.includes('--melo-namespace-sandbox-fallback')) args.push('--melo-namespace-sandbox-fallback')
-    if (!hasSetuidDisable) args.push('--disable-setuid-sandbox')
-    if (!hasNoSandbox && hasSandboxFlag) args.push('--no-sandbox')
+    if (!args.includes('--no-sandbox')) args.push('--no-sandbox')
+    if (!args.includes('--disable-setuid-sandbox')) args.push('--disable-setuid-sandbox')
+  }
+
+  if (isLinux && isNvidia && sandboxInvalid) {
+    if (!args.includes('--disable-gpu-sandbox')) args.push('--disable-gpu-sandbox')
+    args = args.filter((arg) => !String(arg).startsWith('--use-gl='))
+  }
+
+  if (isLinux) {
+    args = args.filter((arg) => !String(arg).startsWith('--ozone-platform='))
+    if (runtime?.isWayland && !runtime?.isXWayland) {
+      args.push('--ozone-platform=wayland')
+    } else {
+      args.push('--ozone-platform=x11')
+    }
   }
 
   return args
@@ -174,10 +214,22 @@ function shouldRetryWithSandboxFallback({ code, signal, args, runtimeMs, sandbox
   return false
 }
 
-function shouldRetryWithSoftwareFallback({ code, signal, args, runtimeMs }) {
-  if (process.env.MELO_ENABLE_EARLY_SOFTWARE_RETRY !== '1') return false
+function shouldRetryWithSoftwareFallback({ code, signal, args, runtimeMs, sandboxStatus, runtime }) {
   if (process.platform !== 'linux') return false
   if (hasSoftwareFallbackArgs(args)) return false
+
+  const sandboxInvalidEffective = !sandboxStatus?.usable || hasNoSandboxArgs(args)
+  const isCrash133 = code === 133 || signal === 'SIGTRAP' || signal === 'SIGABRT'
+  const isNvidiaGpuCrash = runtime?.gpuVendor === 'nvidia'
+    && sandboxInvalidEffective
+    && isCrash133
+
+  if (isNvidiaGpuCrash) {
+    console.warn('[MeloLauncher] NVIDIA + invalid sandbox + crash 133, enabling immediate software fallback')
+    return true
+  }
+
+  if (process.env.MELO_ENABLE_EARLY_SOFTWARE_RETRY !== '1') return false
   if (!isEarlyCrash(runtimeMs)) return false
   if (signal === 'SIGTRAP' || signal === 'SIGABRT') return true
   if (code === 133 || code === 134) return true
@@ -185,11 +237,23 @@ function shouldRetryWithSoftwareFallback({ code, signal, args, runtimeMs }) {
 }
 
 function buildSoftwareFallbackArgs(baseArgs) {
-  const args = [...baseArgs]
+  const toRemove = new Set([
+    '--use-gl=egl',
+    '--use-gl=desktop',
+    '--melo-gpu-egl-retry',
+    '--ignore-gpu-blocklist',
+    '--enable-gpu-rasterization',
+    '--enable-zero-copy',
+  ])
+
+  const args = [...baseArgs].filter((arg) => !toRemove.has(arg) && !String(arg).startsWith('--use-gl='))
+
   if (!args.includes('--melo-emergency-software-gpu')) args.push('--melo-emergency-software-gpu')
   if (!args.includes('--disable-gpu')) args.push('--disable-gpu')
   if (!args.includes('--disable-gpu-compositing')) args.push('--disable-gpu-compositing')
   if (!args.includes('--in-process-gpu')) args.push('--in-process-gpu')
+  if (!args.includes('--enable-unsafe-swiftshader')) args.push('--enable-unsafe-swiftshader')
+
   return args
 }
 
@@ -234,7 +298,8 @@ async function main() {
   const runtimeContext = detectRuntimeContext()
   const sandboxStatus = detectSandboxStatus(electronBinary)
   const launchMode = detectLaunchMode(userArgs)
-  const finalArgs = buildArgs(userArgs, sandboxStatus, launchMode)
+  tryFixSandboxPermissions(sandboxStatus.helperPath, launchMode)
+  const finalArgs = buildArgs(userArgs, sandboxStatus, launchMode, runtimeContext)
 
   const logPayload = {
     source: 'electron-launcher',
@@ -307,7 +372,14 @@ async function main() {
     result = await spawnElectron(electronBinary, currentArgs, currentEnv)
   }
 
-  if (shouldRetryWithSoftwareFallback({ code: result.code, signal: result.signal, args: currentArgs, runtimeMs: result.runtimeMs })) {
+  if (shouldRetryWithSoftwareFallback({
+    code: result.code,
+    signal: result.signal,
+    args: currentArgs,
+    runtimeMs: result.runtimeMs,
+    sandboxStatus,
+    runtime: runtimeContext,
+  })) {
     currentArgs = buildSoftwareFallbackArgs(stripResetArgs(currentArgs))
     currentEnv = {
       ...currentEnv,

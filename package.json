@@ -1,11 +1,13 @@
 {
   "name": "melo",
-  "version": "1.6.4",
+  "version": "1.6.5",
   "description": "Tu musica, sin limites",
   "author": "Melo Maintainers",
   "main": "main.js",
   "scripts": {
     "dev": "bash scripts/install-castlabs-electron.sh && pkill -f \"[e]lectron/dist/electron\" >/dev/null 2>&1 || true; fuser -k 5173/tcp; concurrently \"vite\" \"wait-on tcp:5173 && node scripts/electron-launcher.js .\"",
+    "setup:dev": "bash scripts/setup-dev.sh",
+    "dev:safe": "npm run setup:dev && npm run dev",
     "dev:sandbox-fallback": "pkill -f \"[e]lectron/dist/electron\" >/dev/null 2>&1 || true; fuser -k 5173/tcp; concurrently \"vite\" \"wait-on tcp:5173 && node scripts/electron-launcher.js . --melo-no-sandbox-fallback --no-sandbox --disable-setuid-sandbox\"",
     "prebuild": "node -e \"require('fs').mkdirSync('dist/renderer', {recursive:true})\"",
     "build": "vite build && electron-builder",
@@ -18,7 +20,7 @@
     "test:stress": "node scripts/stress-test.js",
     "test:smoke": "node scripts/e2e-smoke.js",
     "test:release-gate": "bash scripts/verify-drm-apple-sandbox.sh",
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "electron-builder install-app-deps && bash scripts/setup-dev.sh 2>/dev/null || true",
     "release:linux": "vite build && npx electron-builder --linux",
     "prerelease:publish": "node -e \"require('fs').mkdirSync('dist/renderer', {recursive:true})\"",
     "release:publish": "vite build && npx electron-builder --linux --publish always",
@@ -49,6 +51,7 @@
   },
   "build": {
     "asar": true,
+    "afterPack": "scripts/postpack-linux.js",
     "appId": "com.melo.app",
     "productName": "Melo",
     "copyright": "Copyright 2025 Melo",
@@ -95,6 +98,13 @@
     "deb": {
       "afterInstall": "packaging/deb-after-install.sh",
       "afterRemove": "packaging/deb-after-remove.sh"
+    },
+    "appImage": {
+      "executableArgs": [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-gpu-sandbox"
+      ]
     },
     "electronVersion": "40.7.0+wvcus"
   }

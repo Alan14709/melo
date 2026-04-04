@@ -3,23 +3,34 @@
 # Soporta: .deb (X11/Wayland), AppImage (FUSE/Intel/AMD/NVIDIA)
 
 # Detectar binario
-if [ -n "${APPIMAGE:-}" ]; then
-  APPDIR="$(dirname "${APPIMAGE}")"
-  MELO_BIN="${APPDIR}/melo" 2>/dev/null || true
-fi
-if [ -z "${MELO_BIN:-}" ] || [ ! -f "${MELO_BIN}" ]; then
-  if [ -f "/opt/Melo/melo" ]; then
-    MELO_BIN="/opt/Melo/melo"
-  else
-    MELO_BIN="$(dirname "$(readlink -f "$0")")/melo"
-  fi
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+SELF_PATH="$(readlink -f "$0")"
+MELO_BIN=""
+
+if [ -n "${APPDIR:-}" ] && [ -f "${APPDIR}/melo-bin" ]; then
+  MELO_BIN="${APPDIR}/melo-bin"
+elif [ -n "${APPDIR:-}" ] && [ -f "${APPDIR}/melo" ] && [ "$(readlink -f "${APPDIR}/melo")" != "$SELF_PATH" ]; then
+  MELO_BIN="${APPDIR}/melo"
+elif [ -n "${APPIMAGE:-}" ] && [ -f "${SCRIPT_DIR}/melo" ] && [ "$(readlink -f "${SCRIPT_DIR}/melo")" != "$SELF_PATH" ]; then
+  # En AppImage extraido/montado, el wrapper suele ejecutarse desde el mismo directorio del binario.
+  MELO_BIN="${SCRIPT_DIR}/melo"
+elif [ -f "${SCRIPT_DIR}/melo-bin" ]; then
+  # Layout recomendado de empaquetado Linux: launcher como melo y binario real como melo-bin.
+  MELO_BIN="${SCRIPT_DIR}/melo-bin"
+elif [ -f "${SCRIPT_DIR}/melo" ] && [ "$(readlink -f "${SCRIPT_DIR}/melo")" != "$SELF_PATH" ]; then
+  # En linux-unpacked/instalaciones portables, usar el binario colocalizado primero.
+  MELO_BIN="${SCRIPT_DIR}/melo"
+elif [ -f "/opt/Melo/melo" ]; then
+  MELO_BIN="/opt/Melo/melo"
+else
+  MELO_BIN="${SCRIPT_DIR}/melo"
 fi
 
-FLAGS=""
+FLAGS=()
 
 # Sandbox: verificar si chrome-sandbox es usable
 SANDBOX_PATH=""
-for candidate in "/opt/Melo/chrome-sandbox" "$(dirname "${MELO_BIN:-/opt/Melo/melo}")/chrome-sandbox"; do
+for candidate in "$(dirname "${MELO_BIN:-/opt/Melo/melo}")/chrome-sandbox" "${APPDIR:-}/chrome-sandbox" "/opt/Melo/chrome-sandbox"; do
   if [ -f "$candidate" ]; then
     SANDBOX_PATH="$candidate"
     break
@@ -36,7 +47,8 @@ if [ -n "$SANDBOX_PATH" ]; then
 fi
 
 if [ "$SANDBOX_USABLE" = "0" ]; then
-  FLAGS="$FLAGS --no-sandbox --disable-setuid-sandbox"
+  FLAGS+=(--no-sandbox --disable-setuid-sandbox)
+  export MELO_SANDBOX_AUTO_DISABLED=1
 fi
 
 # Detectar sesión
@@ -45,7 +57,7 @@ WAYLAND_DISP="${WAYLAND_DISPLAY:-}"
 
 # Wayland flags
 if [ "$SESSION_TYPE" = "wayland" ] && [ -n "$WAYLAND_DISP" ]; then
-  FLAGS="$FLAGS --ozone-platform=wayland --enable-features=WaylandWindowDecorations"
+  FLAGS+=(--ozone-platform=wayland --enable-features=WaylandWindowDecorations)
 fi
 
 # Detectar GPU vendor
@@ -58,22 +70,22 @@ fi
 
 # Intel: deshabilitar Vulkan y VA-API que crashean en Wayland
 if [ "$GPU_VENDOR" = "intel" ]; then
-  FLAGS="$FLAGS --disable-features=Vulkan,VaapiVideoDecoder,VaapiVideoEncoder"
-  FLAGS="$FLAGS --disable-vulkan"
-  FLAGS="$FLAGS --use-gl=egl"
+  FLAGS+=(--disable-features=Vulkan,VaapiVideoDecoder,VaapiVideoEncoder)
+  FLAGS+=(--disable-vulkan)
+  FLAGS+=(--use-gl=egl)
   if [ "$SESSION_TYPE" = "wayland" ]; then
-    FLAGS="$FLAGS --disable-gpu-sandbox"
+    FLAGS+=(--disable-gpu-sandbox)
   fi
 fi
 
 # AMD en Wayland: flag extra de sandbox
 if [ "$GPU_VENDOR" = "amd" ] && [ "$SESSION_TYPE" = "wayland" ]; then
-  FLAGS="$FLAGS --disable-gpu-sandbox"
+  FLAGS+=(--disable-gpu-sandbox)
 fi
 
 # AppImage: siempre deshabilitar GPU sandbox (FUSE no soporta setuid)
 if [ -n "${APPIMAGE:-}" ]; then
-  FLAGS="$FLAGS --disable-gpu-sandbox"
+  FLAGS+=(--disable-gpu-sandbox)
 fi
 
-exec "$MELO_BIN" $FLAGS "$@"
+exec "$MELO_BIN" "${FLAGS[@]}" "$@"

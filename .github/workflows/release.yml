@@ -12,7 +12,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
-      APP_VERSION: 1.6.4
+      APP_VERSION: 1.6.5
 
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +23,7 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Validate release tag for 1.6.3
+      - name: Validate release tag for 1.6.5
         shell: bash
         run: |
           set -euo pipefail
@@ -41,7 +41,7 @@ jobs:
             ${{ runner.os }}-electron-castlabs-${{ env.APP_VERSION }}-
             ${{ runner.os }}-electron-castlabs-
 
-      - name: Set app version to 1.6.3
+      - name: Set app version to 1.6.5
         shell: bash
         run: |
           set -euo pipefail

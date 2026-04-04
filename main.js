@@ -624,14 +624,24 @@ if (verboseLoggingEnabled) {
 const gpuTier = getEffectiveGPUTier(initialGPUStatus)
 const sandboxFallbackActive = Boolean(initialGPUStatus?.sandboxFallbackActive)
   || hasFlag(RENDERER_FALLBACK_FLAGS.sandbox)
+  || hasFlag('--no-sandbox')
+  || hasFlag('--disable-setuid-sandbox')
   || process.env.MELO_NO_SANDBOX_FALLBACK === '1'
+  || process.env.MELO_SANDBOX_AUTO_DISABLED === '1'
 const isLinux = process.platform === 'linux'
-const sandboxEnabledForRuntime = app.isPackaged ? true : !sandboxFallbackActive
+const sandboxEnabledForRuntime = !sandboxFallbackActive
 const BLOCKED_DRM_FLAGS = new Set([
   'disable-gpu',
   'disable-software-rasterizer',
   'ignore-gpu-blocklist',
 ])
+
+logger.info('Main', 'sandbox_runtime_policy', {
+  packaged: app.isPackaged,
+  sandboxFallbackActive,
+  sandboxEnabledForRuntime,
+  argv: process.argv,
+})
 
 const RENDERER_INDEX_PATH = path.join(app.getAppPath(), 'dist', 'renderer', 'index.html')
 

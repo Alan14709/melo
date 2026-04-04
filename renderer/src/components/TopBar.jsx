@@ -19,7 +19,7 @@ function TopBar({ onSettingsOpen, immersive = false, onExitImmersive }) {
             <Music2 size={14} />
           </div>
         )}
-        <div className="topbar-track-info">
+        <div className="topbar-track-info topbar-info">
           <span className="topbar-title">{currentTrack?.title ?? 'Melo'}</span>
           {currentTrack?.artist && (
             <span className="topbar-artist">{currentTrack.artist}</span>

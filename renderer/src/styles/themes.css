@@ -11,6 +11,15 @@
   --text-tertiary: rgba(255, 255, 255, 0.30);
   --border: rgba(255, 255, 255, 0.08);
   --accent: #fc3c44;
+  --ui-grad-1: rgba(30, 20, 20, 0.76);
+  --ui-grad-2: rgba(19, 14, 14, 0.82);
+  --ui-grad-3: rgba(11, 9, 10, 0.86);
+  --ui-chrome-top: rgba(23, 18, 18, 0.66);
+  --ui-chrome-bottom: rgba(12, 10, 10, 0.74);
+  --ui-sheen: rgba(255, 255, 255, 0.11);
+  --ui-border-glow: rgba(252, 60, 68, 0.24);
+  --artwork-tone-1: rgba(252, 60, 68, 0.28);
+  --artwork-tone-2: rgba(255, 150, 91, 0.20);
 }
 
 [data-theme="oled"] {
@@ -26,6 +35,15 @@
   --text-tertiary: rgba(255, 255, 255, 0.25);
   --border: rgba(255, 255, 255, 0.06);
   --accent: #fc3c44;
+  --ui-grad-1: rgba(10, 10, 10, 0.68);
+  --ui-grad-2: rgba(6, 6, 6, 0.78);
+  --ui-grad-3: rgba(2, 2, 2, 0.88);
+  --ui-chrome-top: rgba(8, 8, 8, 0.64);
+  --ui-chrome-bottom: rgba(2, 2, 2, 0.78);
+  --ui-sheen: rgba(255, 255, 255, 0.12);
+  --ui-border-glow: rgba(252, 60, 68, 0.30);
+  --artwork-tone-1: rgba(252, 60, 68, 0.34);
+  --artwork-tone-2: rgba(255, 82, 82, 0.22);
 }
 
 [data-theme="light"] {
@@ -41,6 +59,15 @@
   --text-tertiary: rgba(0, 0, 0, 0.35);
   --border: rgba(0, 0, 0, 0.08);
   --accent: #fc3c44;
+  --ui-grad-1: rgba(255, 255, 255, 0.80);
+  --ui-grad-2: rgba(248, 249, 252, 0.88);
+  --ui-grad-3: rgba(239, 241, 246, 0.92);
+  --ui-chrome-top: rgba(255, 255, 255, 0.76);
+  --ui-chrome-bottom: rgba(244, 246, 251, 0.88);
+  --ui-sheen: rgba(0, 0, 0, 0.08);
+  --ui-border-glow: rgba(252, 60, 68, 0.18);
+  --artwork-tone-1: rgba(252, 60, 68, 0.16);
+  --artwork-tone-2: rgba(45, 156, 219, 0.14);
 }
 
 [data-theme="nord"] {
@@ -56,6 +83,15 @@
   --text-tertiary: #4c566a;
   --border: rgba(255, 255, 255, 0.08);
   --accent: #88c0d0;
+  --ui-grad-1: rgba(74, 88, 113, 0.78);
+  --ui-grad-2: rgba(59, 71, 92, 0.84);
+  --ui-grad-3: rgba(44, 53, 68, 0.90);
+  --ui-chrome-top: rgba(70, 82, 104, 0.70);
+  --ui-chrome-bottom: rgba(46, 55, 70, 0.82);
+  --ui-sheen: rgba(216, 222, 233, 0.15);
+  --ui-border-glow: rgba(136, 192, 208, 0.24);
+  --artwork-tone-1: rgba(136, 192, 208, 0.28);
+  --artwork-tone-2: rgba(129, 161, 193, 0.24);
 }
 
 [data-theme="catppuccin"] {
@@ -71,42 +107,72 @@
   --text-tertiary: #6c7086;
   --border: rgba(255, 255, 255, 0.08);
   --accent: #cba6f7;
+  --ui-grad-1: rgba(59, 52, 90, 0.78);
+  --ui-grad-2: rgba(43, 39, 72, 0.84);
+  --ui-grad-3: rgba(30, 30, 46, 0.90);
+  --ui-chrome-top: rgba(54, 48, 86, 0.70);
+  --ui-chrome-bottom: rgba(31, 28, 51, 0.82);
+  --ui-sheen: rgba(205, 214, 244, 0.14);
+  --ui-border-glow: rgba(203, 166, 247, 0.26);
+  --artwork-tone-1: rgba(203, 166, 247, 0.30);
+  --artwork-tone-2: rgba(245, 194, 231, 0.20);
 }
 
 [data-theme="liquid-glass"] {
   --bg-base: #000000;
-  --bg-sidebar: rgba(10, 10, 10, 0.70);
-  --bg-topbar: rgba(5, 5, 5, 0.64);
-  --bg-playerbar: rgba(5, 5, 5, 0.68);
-  --bg-card: rgba(17, 17, 17, 0.72);
-  --bg-card-hover: rgba(17, 17, 17, 0.84);
-  --bg-elevated: rgba(17, 17, 17, 0.88);
-  --bg-overlay: rgba(0, 0, 0, 0.56);
-  --bg-hover: rgba(255, 255, 255, 0.08);
-  --bg-active: rgba(255, 255, 255, 0.13);
-  --bg-selected: rgba(255, 255, 255, 0.18);
+  --bg-sidebar: rgba(10, 10, 10, 0.52);
+  --bg-topbar: rgba(5, 5, 5, 0.48);
+  --bg-playerbar: rgba(5, 5, 5, 0.50);
+  --bg-card: rgba(17, 17, 17, 0.58);
+  --bg-card-hover: rgba(17, 17, 17, 0.68);
+  --bg-elevated: rgba(17, 17, 17, 0.74);
+  --bg-overlay: rgba(0, 0, 0, 0.44);
+  --bg-hover: rgba(255, 255, 255, 0.12);
+  --bg-active: rgba(255, 255, 255, 0.19);
+  --bg-selected: rgba(255, 255, 255, 0.24);
   --text-primary: #ffffff;
   --text-secondary: rgba(255, 255, 255, 0.50);
   --text-tertiary: rgba(255, 255, 255, 0.25);
   --text-quaternary: rgba(255, 255, 255, 0.18);
-  --border: rgba(255, 255, 255, 0.10);
-  --border-strong: rgba(255, 255, 255, 0.18);
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-accent: rgba(252, 60, 68, 0.38);
-  --glass-bg: rgba(255, 255, 255, 0.05);
-  --glass-bg-strong: rgba(255, 255, 255, 0.09);
-  --glass-border: rgba(255, 255, 255, 0.14);
-  --glass-border-strong: rgba(255, 255, 255, 0.22);
-  --glass-highlight: rgba(255, 255, 255, 0.12);
-  --glass-blur: blur(18px);
-  --glass-blur-heavy: blur(20px);
-  --accent: #fc3c44;
-  --accent-hover: #ff5a62;
-  --accent-active: #de2f36;
-  --accent-subtle: rgba(252, 60, 68, 0.18);
-  --accent-glow: rgba(252, 60, 68, 0.28);
+  --border: rgba(255, 255, 255, 0.14);
+  --border-strong: rgba(255, 255, 255, 0.24);
+  --border-subtle: rgba(255, 255, 255, 0.10);
+  --border-accent: rgba(255, 55, 95, 0.48);
+  --glass-bg: rgba(255, 255, 255, 0.08);
+  --glass-bg-strong: rgba(255, 255, 255, 0.14);
+  --glass-border: rgba(255, 255, 255, 0.20);
+  --glass-border-strong: rgba(255, 255, 255, 0.32);
+  --glass-highlight: rgba(255, 255, 255, 0.18);
+  --glass-blur: blur(22px);
+  --glass-blur-heavy: blur(34px);
+  --accent: #ff375f;
+  --accent-hover: #ff5f7f;
+  --accent-active: #e62952;
+  --accent-subtle: rgba(255, 55, 95, 0.26);
+  --accent-glow: rgba(255, 55, 95, 0.42);
+  --ui-grad-1: rgba(18, 10, 10, 0.74);
+  --ui-grad-2: rgba(12, 8, 8, 0.80);
+  --ui-grad-3: rgba(10, 8, 10, 0.86);
+  --ui-chrome-top: rgba(20, 12, 14, 0.68);
+  --ui-chrome-bottom: rgba(10, 8, 10, 0.78);
+  --ui-sheen: rgba(255, 255, 255, 0.14);
+  --ui-border-glow: rgba(255, 55, 95, 0.28);
+  --artwork-tone-1: rgba(255, 55, 95, 0.34);
+  --artwork-tone-2: rgba(255, 120, 84, 0.22);
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.36), 0 1px 2px rgba(0, 0, 0, 0.28);
   --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.44), 0 2px 6px rgba(0, 0, 0, 0.34);
   --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.52), 0 4px 10px rgba(0, 0, 0, 0.4);
   --shadow-xl: 0 18px 44px rgba(0, 0, 0, 0.62), 0 8px 14px rgba(0, 0, 0, 0.46);
+}
+
+[data-theme="custom"] {
+  --ui-grad-1: color-mix(in srgb, var(--bg-sidebar, #141414) 82%, transparent);
+  --ui-grad-2: color-mix(in srgb, var(--bg-topbar, #111111) 86%, transparent);
+  --ui-grad-3: color-mix(in srgb, var(--bg-playerbar, #111111) 90%, transparent);
+  --ui-chrome-top: color-mix(in srgb, var(--bg-topbar, #111111) 74%, transparent);
+  --ui-chrome-bottom: color-mix(in srgb, var(--bg-playerbar, #111111) 82%, transparent);
+  --ui-sheen: color-mix(in srgb, var(--text-primary, #ffffff) 14%, transparent);
+  --ui-border-glow: color-mix(in srgb, var(--accent, #fc3c44) 28%, transparent);
+  --artwork-tone-1: color-mix(in srgb, var(--accent, #fc3c44) 34%, transparent);
+  --artwork-tone-2: color-mix(in srgb, var(--bg-card, #1c1c1e) 40%, transparent);
 }

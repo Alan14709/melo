@@ -1,6 +1,6 @@
 # Melo
 
-![Version](https://img.shields.io/badge/version-v1.6.3-success)
+![Version](https://img.shields.io/badge/version-v1.6.5-success)
 ![Platform](https://img.shields.io/badge/platform-Linux-blue)
 ![Node](https://img.shields.io/badge/node-20_LTS-339933)
 ![DRM](https://img.shields.io/badge/DRM-Widevine%20WVCUS-green)
@@ -10,11 +10,11 @@ Melo es una app de escritorio Linux para musica en streaming sobre Electron, con
 
 ## Version actual
 
-- Release estable: **v1.6.4**
+- Release estable: **v1.6.5**
 - Targets Linux: **AppImage** y **DEB**
 - CI/CD: GitHub Actions con publicacion automatica por tag
 
-## Novedades v1.6.4
+## Novedades v1.6.5
 
 - Pipeline de release reforzado para castLabs (WVCUS) con fallback por versiones.
 - Instalacion robusta de Electron con limpieza total por intento.
@@ -119,8 +119,8 @@ npm run build
 
 Artefactos esperados:
 
-- `dist-electron/Melo-1.6.3.AppImage`
-- `dist-electron/melo_1.6.3_amd64.deb`
+- `dist-electron/Melo-1.6.5.AppImage`
+- `dist-electron/melo_1.6.5_amd64.deb`
 
 ## Instalacion de artefactos
 
@@ -147,7 +147,7 @@ Workflow principal:
 Reglas clave del pipeline:
 
 1. Ejecuta en `ubuntu-latest` con Node 20.
-2. Fija version de app a `1.6.3`.
+2. Fija version de app a `1.6.5`.
 3. Instala Electron castLabs con fallback secuencial:
    - `28.2.10+wvcus`
    - `27.3.11+wvcus`
@@ -185,14 +185,14 @@ git status
 3. Crear tag de release:
 
 ```bash
-git tag -a v1.6.3 -m "Release 1.6.3"
+git tag -a v1.6.5 -m "Release 1.6.5"
 ```
 
 4. Publicar:
 
 ```bash
 git push origin main
-git push origin v1.6.3
+git push origin v1.6.5
 ```
 
 5. Verificar en GitHub Actions que el job `Release Melo` termine en verde.

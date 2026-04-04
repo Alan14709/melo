@@ -382,6 +382,7 @@ function detectEnvironment() {
 
 function shouldUseSandboxFallback() {
   if (process.env.MELO_SANDBOX_AUTO_DISABLED === '1') return true
+  if (process.env.APPIMAGE && state.environment?.sandbox?.usable === false) return true
   if (hasArg(state.flags.sandboxFlag) || hasArg('--no-sandbox')) return true
   return Boolean(state.persisted.safeModeLocked && state.persisted.safeModeReason === CRASH_CLASS.SANDBOX)
 }
@@ -426,6 +427,10 @@ function effectiveCrashCount(kind, now = Date.now()) {
 }
 
 function shouldUseFallback() {
+  if (shouldForceSoftwareOnNoSandboxNvidia()) {
+    return true
+  }
+
   if (state.runtime.cleanBoot) {
     const emergencyArgsPresent = hasArg(state.flags.emergencySoftwareFlag)
       || hasArg('--disable-gpu')
@@ -456,6 +461,18 @@ function getDesiredMode() {
   return MODE.HARDWARE
 }
 
+function isNoSandboxEffective() {
+  return hasArg('--no-sandbox')
+    || hasArg(state.flags.sandboxFlag)
+    || process.env.MELO_SANDBOX_AUTO_DISABLED === '1'
+}
+
+function shouldForceSoftwareOnNoSandboxNvidia() {
+  if (process.platform !== 'linux') return false
+  if (state.environment?.gpuVendor !== 'nvidia') return false
+  return isNoSandboxEffective()
+}
+
 function getStartupProfile() {
   if (state.persisted.safeModeLocked && state.persisted.safeModeReason === CRASH_CLASS.GPU && !state.runtime.cleanBoot) {
     return 'safe-mode'
@@ -469,6 +486,7 @@ function buildPolicyFlags(mode, {
   safeMode = false,
   useEglRetry = false,
   hardwareOptimized = false,
+  forceNoSandboxNvidiaSoftware = false,
 } = {}) {
   const flags = []
 
@@ -478,7 +496,8 @@ function buildPolicyFlags(mode, {
     else if (hardwareOptimized) flags.push('enable-gpu-rasterization')
   } else {
     flags.push('disableHardwareAcceleration', 'disable-gpu')
-    if (safeMode) flags.push('disable-gpu-compositing')
+    if (safeMode || forceNoSandboxNvidiaSoftware) flags.push('disable-gpu-compositing')
+    if (forceNoSandboxNvidiaSoftware) flags.push('in-process-gpu', 'enable-unsafe-swiftshader')
   }
 
   if (namespaceSandboxFallback && !sandboxFallback) {
@@ -504,6 +523,7 @@ function applyBaseFlags() {
   if (!state.app || state.initialized) return
 
   const desiredMode = getDesiredMode()
+  const forceNoSandboxNvidiaSoftware = shouldForceSoftwareOnNoSandboxNvidia()
   const sandboxFallback = shouldUseSandboxFallback()
   const namespaceSandboxFallback = shouldUseNamespaceSandboxFallback({ sandboxFallback })
   const useEglRetry = shouldUseEglRetryProfile({ sandboxFallback })
@@ -522,7 +542,11 @@ function applyBaseFlags() {
   } else {
     state.app.disableHardwareAcceleration()
     appendSwitchIfMissing('disable-gpu')
-    if (safeMode) appendSwitchIfMissing('disable-gpu-compositing')
+    if (safeMode || forceNoSandboxNvidiaSoftware) appendSwitchIfMissing('disable-gpu-compositing')
+    if (forceNoSandboxNvidiaSoftware) {
+      appendSwitchIfMissing('in-process-gpu')
+      appendSwitchIfMissing('enable-unsafe-swiftshader')
+    }
   }
 
   if (namespaceSandboxFallback && !sandboxFallback) {
@@ -552,6 +576,7 @@ function applyBaseFlags() {
     profile: startupProfile,
     desiredMode,
     fallback: shouldUseFallback(),
+    forceNoSandboxNvidiaSoftware,
     sandboxFallback,
     namespaceSandboxFallback,
     useEglRetry,
@@ -564,6 +589,7 @@ function applyBaseFlags() {
       safeMode,
       useEglRetry,
       hardwareOptimized,
+      forceNoSandboxNvidiaSoftware,
     }),
   })
 }
@@ -605,6 +631,7 @@ function getGPUStatus() {
   const profile = getStartupProfile()
   const safeModeLocked = Boolean(state.persisted.safeModeLocked)
   const safeModeReason = state.persisted.safeModeReason || null
+  const forceNoSandboxNvidiaSoftware = shouldForceSoftwareOnNoSandboxNvidia()
   const sandboxFallbackActive = shouldUseSandboxFallback()
   const namespaceSandboxFallbackActive = shouldUseNamespaceSandboxFallback({ sandboxFallback: sandboxFallbackActive })
   const eglRetryActive = shouldUseEglRetryProfile({ sandboxFallback: sandboxFallbackActive })
@@ -641,8 +668,10 @@ function getGPUStatus() {
       safeMode: profile === 'safe-mode',
       useEglRetry: eglRetryActive,
       hardwareOptimized,
+      forceNoSandboxNvidiaSoftware,
     }),
     detectedSoftware: detectSoftwareMode(featureStatus),
+    forceNoSandboxNvidiaSoftware,
   }
 
   status.validationSummary = buildValidationSummary(status)
@@ -732,7 +761,13 @@ function buildRelaunchArgs({
     if (fallbackStage === 'software-1002' && !args.includes(state.flags.softwareRetryFlag)) {
       args.push(state.flags.softwareRetryFlag)
     }
+    if (fallbackStage === 'software-1002' && !args.includes(state.flags.emergencySoftwareFlag)) {
+      args.push(state.flags.emergencySoftwareFlag)
+    }
     if (!args.includes('--disable-gpu')) args.push('--disable-gpu')
+    if (!args.includes('--disable-gpu-compositing')) args.push('--disable-gpu-compositing')
+    if (!args.includes('--in-process-gpu')) args.push('--in-process-gpu')
+    if (!args.includes('--enable-unsafe-swiftshader')) args.push('--enable-unsafe-swiftshader')
   }
 
   if (safeMode) {
@@ -855,30 +890,55 @@ function handleGPUCrash(event, details = {}) {
 
   if (crashClass === CRASH_CLASS.GPU) {
     if (environmentalLaunchFailed1002) {
-      const retryStage = getEnvironmental1002RetryStage()
-      const retriesExhausted = retryStage >= MAX_ENVIRONMENTAL_1002_RETRIES
+      const isNvidia = state.environment?.gpuVendor === 'nvidia'
+      const sandboxInvalid = state.environment?.sandbox?.usable === false
+        || useSandboxFallback
+        || hasArg('--no-sandbox')
+        || process.env.MELO_SANDBOX_AUTO_DISABLED === '1'
+      const alreadyForcedSoftwareNoSandbox = shouldForceSoftwareOnNoSandboxNvidia()
+
       useSandboxFallback = false
       safeMode = false
-      allowRetryHardware = retryStage < 1
 
-      if (retryStage === 0) {
-        useFallback = false
-        useEglRetry = true
-        mode = 'environmental-1002-retry-egl'
-        message = 'GPU process launch failed: 1002 treated as unstable configuration. Retrying with EGL backend.'
-      } else if (retryStage === 1) {
+      if (isNvidia && sandboxInvalid) {
+        // NVIDIA + sandbox invalido suele fallar tambien con --use-gl=egl.
+        // Saltamos EGL y vamos directo a software fallback.
         useFallback = true
         useEglRetry = false
         fallbackStage = 'software-1002'
-        mode = 'environmental-1002-fallback-software'
-        message = 'GPU process launch failed: 1002 persisted on EGL. Falling back to software mode.'
+        allowRetryHardware = false
+        mode = 'nvidia-no-sandbox-software-fallback'
+        message = 'GPU process launch failed: 1002 on NVIDIA with invalid sandbox. Skipping EGL retry and using software fallback.'
+
+        if (alreadyForcedSoftwareNoSandbox) {
+          shouldRelaunch = false
+          mode = 'nvidia-no-sandbox-observed-in-forced-software'
+          message = 'GPU launch-failed 1002 observed while already in forced software no-sandbox mode. Holding relaunch to avoid loops.'
+        }
       } else {
-        useFallback = true
-        shouldRelaunch = false
-        mode = retriesExhausted
-          ? 'environmental-1002-retries-exhausted'
-          : 'environmental-1002-observed-in-software'
-        message = 'GPU process launch failed: 1002 observed after max retries. Holding current mode to avoid loops.'
+        const retryStage = getEnvironmental1002RetryStage()
+        const retriesExhausted = retryStage >= MAX_ENVIRONMENTAL_1002_RETRIES
+        allowRetryHardware = retryStage < 1
+
+        if (retryStage === 0) {
+          useFallback = false
+          useEglRetry = true
+          mode = 'environmental-1002-retry-egl'
+          message = 'GPU process launch failed: 1002 treated as unstable configuration. Retrying with EGL backend.'
+        } else if (retryStage === 1) {
+          useFallback = true
+          useEglRetry = false
+          fallbackStage = 'software-1002'
+          mode = 'environmental-1002-fallback-software'
+          message = 'GPU process launch failed: 1002 persisted on EGL. Falling back to software mode.'
+        } else {
+          useFallback = true
+          shouldRelaunch = false
+          mode = retriesExhausted
+            ? 'environmental-1002-retries-exhausted'
+            : 'environmental-1002-observed-in-software'
+          message = 'GPU process launch failed: 1002 observed after max retries. Holding current mode to avoid loops.'
+        }
       }
 
       if (emergencySoftware) {

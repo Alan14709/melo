@@ -108,7 +108,7 @@ function PlayerBar() {
             <div className="artwork-glow" style={{ '--glow-color': color }} />
           )}
         </div>
-        <div className="playerbar-info animate-fade-in" key={currentTrack?.title || 'no-track'}>
+        <div className="playerbar-info" key={currentTrack?.title}>
           <p className="playerbar-title">{currentTrack?.title ?? 'Sin reproduccion'}</p>
           <p className="playerbar-subtitle">
             {[currentTrack?.artist, currentTrack?.album].filter(Boolean).join(' • ') || '—'}

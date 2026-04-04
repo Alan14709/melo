@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
 import { Clock, Music, Headphones, BarChart2, Calendar, TrendingUp } from 'lucide-react'
 
-function StatCard({ icon: Icon, value, label, color }) {
+function StatCard({ icon: Icon, value, label, color, style }) {
   return (
-    <div className="stat-card">
+    <div className="stat-card" style={style}>
       <div className="stat-card-icon" style={{ color: color || 'var(--accent)' }}>
         <Icon size={18} />
       </div>
@@ -160,6 +160,32 @@ export default function StatsView() {
 
   const maxArtist = summary.topArtists?.[0]?.count || 1
   const maxTrack = summary.topTracks?.[0]?.count || 1
+  const statCards = [
+    {
+      icon: Music,
+      value: summary.totalPlays.toLocaleString(),
+      label: 'canciones',
+      color: 'var(--accent)',
+    },
+    {
+      icon: Clock,
+      value: fmtTime(summary.totalHours, summary.totalMinutes),
+      label: 'escuchadas',
+      color: '#30d158',
+    },
+    {
+      icon: Calendar,
+      value: summary.uniqueDays,
+      label: 'dias activos',
+      color: '#0a84ff',
+    },
+    {
+      icon: TrendingUp,
+      value: fmtHour(summary.peakHour),
+      label: 'hora pico',
+      color: '#ff9f0a',
+    },
+  ]
 
   return (
     <div className="stats-view">
@@ -195,30 +221,16 @@ export default function StatsView() {
       </div>
 
       <div className="stat-cards-grid">
-        <StatCard
-          icon={Music}
-          value={summary.totalPlays.toLocaleString()}
-          label="canciones"
-          color="var(--accent)"
-        />
-        <StatCard
-          icon={Clock}
-          value={fmtTime(summary.totalHours, summary.totalMinutes)}
-          label="escuchadas"
-          color="#30d158"
-        />
-        <StatCard
-          icon={Calendar}
-          value={summary.uniqueDays}
-          label="dias activos"
-          color="#0a84ff"
-        />
-        <StatCard
-          icon={TrendingUp}
-          value={fmtHour(summary.peakHour)}
-          label="hora pico"
-          color="#ff9f0a"
-        />
+        {statCards.map((card, index) => (
+          <StatCard
+            key={card.label}
+            icon={card.icon}
+            value={card.value}
+            label={card.label}
+            color={card.color}
+            style={{ animationDelay: `${index * 80}ms` }}
+          />
+        ))}
       </div>
 
       <div className="stats-section">

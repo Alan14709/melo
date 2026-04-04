@@ -3,12 +3,12 @@
 set -euo pipefail
 
 # ═══════════════════════════════════════════════════════════════════════════
-# MELO RELEASE WORKFLOW - v1.6.3
+# MELO RELEASE WORKFLOW - v1.6.5
 # Production-safe, zero-manual-intervention release script
 # ═══════════════════════════════════════════════════════════════════════════
 
 # CONFIG
-TARGET_VERSION="1.6.3"
+TARGET_VERSION="1.6.5"
 RELEASE_TAG="v${TARGET_VERSION}"
 GIT_BRANCH="main"
 RELEASE_MESSAGE="release: v${TARGET_VERSION} - stability, DRM fixes, session persistence, UI improvements"
