@@ -27,6 +27,7 @@ export default function App() {
   const metadataDebounceRef = useRef(null)
   const [healthStatus, setHealthStatus] = useState({ status: 'unknown', reason: null })
   const [fallbackStatus, setFallbackStatus] = useState({ phase: 'idle', message: null, mitigated: false })
+  const [gpuStatus, setGpuStatus] = useState(null)
   const [immersive, setImmersive] = useState(false)
   const shortcutStateRef = useRef({
     commandPaletteOpen: false,
@@ -46,7 +47,7 @@ export default function App() {
     hydrateSettings,
     setAccentColor,
   } = usePlayerStore()
-  const uiSafe = getUISafeMode()
+  const uiSafe = useMemo(() => getUISafeMode(gpuStatus), [gpuStatus])
 
   const servicesList = useMemo(() => Object.values(SERVICES), [])
 
@@ -150,6 +151,8 @@ export default function App() {
   // Escuchar metadata enviada por el preload del BrowserView.
   useEffect(() => {
     // Mantener handlers estables para evitar acumulacion de listeners.
+    const unsubscribers = []
+
     const handleMediaUpdate = async (data) => {
       if (!data?.title) return
 
@@ -221,9 +224,9 @@ export default function App() {
       addConnectedService(data.serviceId)
     }
 
-    window.melo.onMediaUpdate(handleMediaUpdate)
-    window.melo.onServiceActive(handleServiceActive)
-    window.melo.onShortcut?.((payload) => {
+    unsubscribers.push(window.melo.onMediaUpdate(handleMediaUpdate))
+    unsubscribers.push(window.melo.onServiceActive(handleServiceActive))
+    unsubscribers.push(window.melo.onShortcut?.((payload) => {
       const shortcut = payload?.shortcut
       if (shortcut === 'cmdk') {
         setCommandPaletteOpen(!usePlayerStore.getState().commandPaletteOpen)
@@ -244,14 +247,18 @@ export default function App() {
       if (shortcut === 'space') {
         window.melo.playerAction('play')
       }
-    })
-    window.melo.health?.onChange?.((status) => {
+    }))
+    unsubscribers.push(window.melo.health?.onChange?.((status) => {
       if (status && typeof status === 'object') setHealthStatus(status)
-    })
+    }))
 
-    window.melo.fallback?.onChange?.((status) => {
+    unsubscribers.push(window.melo.fallback?.onChange?.((status) => {
       if (status && typeof status === 'object') setFallbackStatus(status)
-    })
+    }))
+
+    unsubscribers.push(window.melo.gpuInfo?.onChange?.((status) => {
+      if (status && typeof status === 'object') setGpuStatus(status)
+    }))
 
     window.melo.health?.getStatus?.().then((status) => {
       if (status && typeof status === 'object') setHealthStatus(status)
@@ -261,14 +268,16 @@ export default function App() {
       if (status && typeof status === 'object') setFallbackStatus(status)
     }).catch(() => {})
 
+    window.melo.gpuInfo?.getStatus?.().then((status) => {
+      if (status && typeof status === 'object') setGpuStatus(status)
+    }).catch(() => {})
+
     // CRITICO: limpiar listeners al desmontar para evitar warnings de MaxListeners.
     return () => {
       clearTimeout(metadataDebounceRef.current)
-      window.melo.removeAllListeners('media:update')
-      window.melo.removeAllListeners('service:active')
-      window.melo.removeAllListeners('shortcut:event')
-      window.melo.removeAllListeners('health:status')
-      window.melo.removeAllListeners('fallback:status')
+      unsubscribers.forEach((unsubscribe) => {
+        if (typeof unsubscribe === 'function') unsubscribe()
+      })
     }
   }, [setCommandPaletteOpen])
 

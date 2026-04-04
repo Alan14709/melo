@@ -19,19 +19,71 @@ const CONFLICTING_GPU_FLAGS = new Set([
 
 function detectRuntimeContext() {
   const sessionType = process.env.XDG_SESSION_TYPE || 'unknown'
-  const isWayland = Boolean(process.env.WAYLAND_DISPLAY || sessionType === 'wayland')
-  const isXWayland = Boolean(isWayland && process.env.DISPLAY)
-  const isX11 = Boolean(process.env.DISPLAY) && !isWayland
+  const hasWaylandDisplay = Boolean(process.env.WAYLAND_DISPLAY)
+  const hasXDisplay = Boolean(process.env.DISPLAY)
+  const isWayland = Boolean(hasWaylandDisplay || sessionType === 'wayland')
+  const isXWayland = Boolean(isWayland && hasXDisplay)
+  const isX11 = Boolean(hasXDisplay && !isWayland)
   const gpuVendor = fs.existsSync('/proc/driver/nvidia/version') ? 'nvidia' : 'unknown'
 
   return {
     platform: process.platform,
     sessionType,
+    hasWaylandDisplay,
+    hasXDisplay,
     isWayland,
     isXWayland,
     isX11,
     gpuVendor,
   }
+}
+
+function normalizeDisplayBackend(value = '') {
+  const normalized = String(value || '').toLowerCase().trim()
+  if (normalized === 'x11' || normalized === 'wayland') return normalized
+  return 'auto'
+}
+
+function chooseDisplayBackend(runtime, requested = 'auto') {
+  const mode = normalizeDisplayBackend(requested)
+  const hasWayland = Boolean(runtime?.hasWaylandDisplay || runtime?.isWayland)
+  const hasX11 = Boolean(runtime?.hasXDisplay || runtime?.isX11 || runtime?.isXWayland)
+
+  if (mode === 'wayland') {
+    if (hasWayland) {
+      return { backend: 'wayland', mode, fallbackApplied: false, reason: 'forced-wayland' }
+    }
+    if (hasX11) {
+      return { backend: 'x11', mode, fallbackApplied: true, reason: 'forced-wayland-fallback-x11' }
+    }
+    return { backend: 'x11', mode, fallbackApplied: true, reason: 'forced-wayland-no-display-fallback-x11' }
+  }
+
+  if (mode === 'x11') {
+    if (hasX11) {
+      return { backend: 'x11', mode, fallbackApplied: false, reason: 'forced-x11' }
+    }
+    if (hasWayland) {
+      return { backend: 'wayland', mode, fallbackApplied: true, reason: 'forced-x11-fallback-wayland' }
+    }
+    return { backend: 'x11', mode, fallbackApplied: true, reason: 'forced-x11-no-display-fallback-x11' }
+  }
+
+  // Auto policy prioritizes stability in hybrid sessions.
+  if (runtime?.isXWayland) {
+    return { backend: 'x11', mode, fallbackApplied: false, reason: 'auto-xwayland-prefers-x11' }
+  }
+  if (runtime?.isWayland) {
+    return { backend: 'wayland', mode, fallbackApplied: false, reason: 'auto-native-wayland' }
+  }
+  if (runtime?.isX11) {
+    return { backend: 'x11', mode, fallbackApplied: false, reason: 'auto-native-x11' }
+  }
+  if (hasWayland) {
+    return { backend: 'wayland', mode, fallbackApplied: false, reason: 'auto-wayland-display-present' }
+  }
+
+  return { backend: 'x11', mode, fallbackApplied: false, reason: 'auto-default-x11' }
 }
 
 function detectSandboxStatus(electronBinary) {
@@ -127,7 +179,7 @@ function tryFixSandboxPermissions(helperPath, launchMode) {
   }
 }
 
-function buildArgs(baseArgs, sandboxStatus, launchMode, runtime) {
+function buildArgs(baseArgs, sandboxStatus, launchMode, runtime, displayDecision) {
   let args = [...baseArgs]
   const isPackaged = launchMode === 'packaged'
 
@@ -142,18 +194,18 @@ function buildArgs(baseArgs, sandboxStatus, launchMode, runtime) {
 
   if (isLinux && sandboxInvalid) {
     if (!args.includes('--melo-namespace-sandbox-fallback')) args.push('--melo-namespace-sandbox-fallback')
-    if (!args.includes('--no-sandbox')) args.push('--no-sandbox')
     if (!args.includes('--disable-setuid-sandbox')) args.push('--disable-setuid-sandbox')
   }
 
-  if (isLinux && isNvidia && sandboxInvalid) {
+  if (isLinux && isNvidia && hasNoSandboxArgs(args)) {
     if (!args.includes('--disable-gpu-sandbox')) args.push('--disable-gpu-sandbox')
     args = args.filter((arg) => !String(arg).startsWith('--use-gl='))
   }
 
   if (isLinux) {
     args = args.filter((arg) => !String(arg).startsWith('--ozone-platform='))
-    if (runtime?.isWayland && !runtime?.isXWayland) {
+    const backend = displayDecision?.backend || 'x11'
+    if (backend === 'wayland') {
       args.push('--ozone-platform=wayland')
     } else {
       args.push('--ozone-platform=x11')
@@ -236,6 +288,22 @@ function shouldRetryWithSoftwareFallback({ code, signal, args, runtimeMs, sandbo
   return false
 }
 
+function shouldRetryWithDisplayFallback({ code, signal, args, runtimeMs, runtime, displayDecision, launchMode, stderr }) {
+  if (process.platform !== 'linux') return false
+  if (launchMode === 'packaged') return false
+  if (process.env.MELO_DISPLAY_BACKEND_RETRIED === '1') return false
+  if (displayDecision?.backend !== 'wayland') return false
+  if (!runtime?.hasXDisplay) return false
+  if (!isEarlyCrash(runtimeMs)) return false
+  if (args.includes('--ozone-platform=x11')) return false
+
+  if (isZygoteFailure(stderr)) return true
+  if (signal === 'SIGTRAP' || signal === 'SIGABRT') return true
+  if (code === 133 || code === 134) return true
+  if (code === 1002) return true
+  return false
+}
+
 function buildSoftwareFallbackArgs(baseArgs) {
   const toRemove = new Set([
     '--use-gl=egl',
@@ -298,13 +366,16 @@ async function main() {
   const runtimeContext = detectRuntimeContext()
   const sandboxStatus = detectSandboxStatus(electronBinary)
   const launchMode = detectLaunchMode(userArgs)
+  const requestedDisplayBackend = normalizeDisplayBackend(process.env.MELO_DISPLAY_BACKEND || 'auto')
+  const displayDecision = chooseDisplayBackend(runtimeContext, requestedDisplayBackend)
   tryFixSandboxPermissions(sandboxStatus.helperPath, launchMode)
-  const finalArgs = buildArgs(userArgs, sandboxStatus, launchMode, runtimeContext)
+  const finalArgs = buildArgs(userArgs, sandboxStatus, launchMode, runtimeContext, displayDecision)
 
   const logPayload = {
     source: 'electron-launcher',
     launchMode,
     runtime: runtimeContext,
+    display: displayDecision,
     sandbox: sandboxStatus,
     namespaceSandboxFallback: !sandboxStatus.usable && launchMode !== 'packaged',
     autoNoSandbox: false,
@@ -329,12 +400,46 @@ async function main() {
     MELO_SANDBOX_NAMESPACE_FALLBACK: (!sandboxStatus.usable && launchMode !== 'packaged') ? '1' : (process.env.MELO_SANDBOX_NAMESPACE_FALLBACK || '0'),
     MELO_SANDBOX_HELPER_REASON: sandboxStatus.reason || 'unknown',
     MELO_EARLY_SOFTWARE_FALLBACK: process.env.MELO_EARLY_SOFTWARE_FALLBACK || '0',
+    MELO_DISPLAY_BACKEND_MODE: displayDecision.mode,
+    MELO_DISPLAY_BACKEND_SELECTED: displayDecision.backend,
+    MELO_DISPLAY_BACKEND_REASON: displayDecision.reason,
+    MELO_DISPLAY_BACKEND_RETRIED: process.env.MELO_DISPLAY_BACKEND_RETRIED || '0',
     MELO_LAUNCH_MODE: launchMode,
   }
 
   let currentArgs = finalArgs
   let currentEnv = { ...baseEnv }
   let result = await spawnElectron(electronBinary, currentArgs, currentEnv)
+
+  if (shouldRetryWithDisplayFallback({
+    code: result.code,
+    signal: result.signal,
+    args: currentArgs,
+    runtimeMs: result.runtimeMs,
+    runtime: runtimeContext,
+    displayDecision,
+    launchMode,
+    stderr: result.stderr,
+  })) {
+    const retryBaseArgs = stripConflictingGpuArgs(stripResetArgs(currentArgs))
+      .filter((arg) => !String(arg).startsWith('--ozone-platform='))
+    currentArgs = [...retryBaseArgs, '--ozone-platform=x11']
+    currentEnv = {
+      ...currentEnv,
+      MELO_DISPLAY_BACKEND_SELECTED: 'x11',
+      MELO_DISPLAY_BACKEND_REASON: 'runtime-wayland-crash-fallback-x11',
+      MELO_DISPLAY_BACKEND_RETRIED: '1',
+    }
+
+    console.warn('[MeloLauncher] Runtime display fallback triggered: wayland -> x11', JSON.stringify({
+      previousExitCode: result.code,
+      previousSignal: result.signal || null,
+      previousRuntimeMs: result.runtimeMs,
+      retryArgs: currentArgs,
+    }))
+
+    result = await spawnElectron(electronBinary, currentArgs, currentEnv)
+  }
 
   if (shouldRetryWithSandboxFallback({
     code: result.code,
@@ -405,4 +510,16 @@ async function main() {
   process.exit(typeof result.code === 'number' ? result.code : 1)
 }
 
-main()
+if (require.main === module) {
+  main()
+} else {
+  module.exports = {
+    detectRuntimeContext,
+    normalizeDisplayBackend,
+    chooseDisplayBackend,
+    buildArgs,
+    shouldRetryWithSandboxFallback,
+    shouldRetryWithSoftwareFallback,
+    shouldRetryWithDisplayFallback,
+  }
+}

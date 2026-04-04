@@ -4,7 +4,8 @@ const { spawn } = require('child_process')
 
 const ROOT = path.join(__dirname, '..')
 const REPORT_PATH = path.join(ROOT, 'test-results', 'stress-report.json')
-const ELECTRON_BIN = process.platform === 'win32' ? 'npx.cmd' : 'npx'
+const NODE_BIN = process.execPath
+const LAUNCHER_SCRIPT = path.join(ROOT, 'scripts', 'electron-launcher.js')
 
 function removeOldReport() {
   try {
@@ -42,6 +43,7 @@ function waitForReport(timeoutMs = 300000) {
 
 async function main() {
   removeOldReport()
+  const testProfileSuffix = process.env.MELO_TEST_PROFILE_SUFFIX || `stress-${Date.now().toString(36)}`
 
   const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)
   if (!hasDisplay) {
@@ -59,13 +61,14 @@ async function main() {
   }
 
   const child = spawn(
-    ELECTRON_BIN,
-    ['electron', '.', '--no-sandbox'],
+    NODE_BIN,
+    [LAUNCHER_SCRIPT, '.'],
     {
       cwd: ROOT,
       env: {
         ...process.env,
         MELO_RUN_STRESS: '1',
+        MELO_TEST_PROFILE_SUFFIX: testProfileSuffix,
         MELO_STRESS_SWITCHES: process.env.MELO_STRESS_SWITCHES || '40',
         MELO_STRESS_MIN_DELAY: process.env.MELO_STRESS_MIN_DELAY || '50',
         MELO_STRESS_MAX_DELAY: process.env.MELO_STRESS_MAX_DELAY || '300',

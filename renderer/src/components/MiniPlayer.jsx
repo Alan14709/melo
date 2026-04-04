@@ -6,14 +6,14 @@ export default function MiniPlayer() {
   const [isPlaying, setIsPlaying] = useState(false)
 
   useEffect(() => {
-    window.melo.onMediaUpdate((data) => {
+    const unsubscribeMedia = window.melo.onMediaUpdate((data) => {
       if (!data?.title) return
       setTrack(data)
       setIsPlaying(data.state === 'playing')
     })
 
     return () => {
-      window.melo.removeAllListeners('media:update')
+      if (typeof unsubscribeMedia === 'function') unsubscribeMedia()
     }
   }, [])
 

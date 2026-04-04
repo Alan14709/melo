@@ -1,6 +1,39 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 const isValidChannel = (channel) => typeof channel === 'string' && channel.trim().length > 0
+const DEBUG_BRIDGE_ENABLED = process.env.MELO_DISABLE_DEBUG_IPC !== '1'
+  && (process.env.MELO_ENABLE_DEBUG_IPC === '1' || process.defaultApp === true)
+const REMOVE_ALL_LISTENERS_ALLOWLIST = new Set([
+  'melo:polling-mode',
+])
+
+function subscribeIpc(channel, listener) {
+  if (!isValidChannel(channel) || typeof listener !== 'function') {
+    return () => {}
+  }
+
+  ipcRenderer.on(channel, listener)
+  return () => {
+    try {
+      ipcRenderer.removeListener(channel, listener)
+    } catch (_) {}
+  }
+}
+
+function safeRemoveAllListeners(channel) {
+  if (!isValidChannel(channel)) return false
+  if (!REMOVE_ALL_LISTENERS_ALLOWLIST.has(channel)) {
+    reportError(new Error(`remove_all_listeners_blocked:${channel}`), 'preload.removeAllListeners')
+    return false
+  }
+
+  try {
+    ipcRenderer.removeAllListeners(channel)
+    return true
+  } catch (_) {
+    return false
+  }
+}
 
 function normalizeBridgeError(error, origin) {
   return {
@@ -106,6 +139,17 @@ function readMediaSession() {
 let _pollTimer = null
 let _pollInFlight = false
 let _pollIntervalMs = 2500
+let _pollMode = 'foreground'
+let _lastPlaybackState = 'unknown'
+
+function computePollIntervalMs() {
+  const inBackground = _pollMode === 'background' || document.hidden
+  if (inBackground) return 6500
+
+  if (_lastPlaybackState === 'playing') return 2200
+  if (_lastPlaybackState === 'paused') return 3800
+  return 5000
+}
 
 function stopPolling() {
   if (_pollTimer) {
@@ -116,7 +160,10 @@ function stopPolling() {
 
 function schedulePolling() {
   stopPolling()
-  _pollTimer = setTimeout(runPollingTick, _pollIntervalMs)
+  _pollIntervalMs = computePollIntervalMs()
+  // Pequeño jitter para evitar picos sincronizados entre vistas/procesos.
+  const jitterMs = Math.floor(Math.random() * 240)
+  _pollTimer = setTimeout(runPollingTick, _pollIntervalMs + jitterMs)
 }
 
 function runPollingTick() {
@@ -128,6 +175,7 @@ function runPollingTick() {
   _pollInFlight = true
   try {
     const data = readMediaSession()
+    _lastPlaybackState = String(data?.state || 'unknown')
     if (data?.title) safeSend('media:update', data)
   } catch (_) {
   } finally {
@@ -157,10 +205,11 @@ function startPolling() {
 function handleVisibilityMode() {
   // Reducir consumo: detener polling al quedar inactivo y reanudar al volver.
   if (document.hidden) {
+    _pollMode = 'background'
     stopPolling()
     return
   }
-  _pollIntervalMs = 2500
+  _pollMode = 'foreground'
   if (isServiceContext) schedulePolling()
 }
 
@@ -175,7 +224,7 @@ if (isServiceContext) {
 
   ipcRenderer.removeAllListeners('melo:polling-mode')
   ipcRenderer.on('melo:polling-mode', (_e, mode) => {
-    _pollIntervalMs = mode === 'background' ? 5000 : 2500
+    _pollMode = mode === 'background' ? 'background' : 'foreground'
     schedulePolling()
   })
 
@@ -204,20 +253,21 @@ contextBridge.exposeInMainWorld('melo', {
     reportError(error, 'renderer_bridge')
   },
   onMediaUpdate: (cb) => {
-    ipcRenderer.on('media:update', (_e, data) => {
+    const listener = (_e, data) => {
       // Actualizar metadata tambien desde el listener de renderer.
       updateMediaSessionMetadata(data)
       cb(data)
-    })
+    }
+    return subscribeIpc('media:update', listener)
   },
   onServiceActive: (cb) => {
-    ipcRenderer.on('service:active', (_e, data) => cb(data))
+    return subscribeIpc('service:active', (_e, data) => cb(data))
   },
   onCommandPaletteToggle: (cb) => {
-    ipcRenderer.on('command-palette:toggle', (_e, data) => cb(data))
+    return subscribeIpc('command-palette:toggle', (_e, data) => cb(data))
   },
   onShortcut: (cb) => {
-    ipcRenderer.on('shortcut:event', (_e, data) => cb(data))
+    return subscribeIpc('shortcut:event', (_e, data) => cb(data))
   },
   playerAction: (action) => {
     safeSend('player:action', action)
@@ -252,19 +302,21 @@ contextBridge.exposeInMainWorld('melo', {
   getLastService: () => {
     return safeInvoke('services:getLast')
   },
-  debugButtons: () => {
-    return safeInvoke('debug:buttons')
-  },
-  debug: {
-    getMetrics: () => safeInvoke('debug:metrics'),
-    onMetricsUpdate: (cb) => ipcRenderer.on('metrics:update', (_e, data) => cb(data)),
-    getHealth: () => safeInvoke('debug:health'),
-    crashView: (serviceId) => safeInvoke('debug:crash-view', { serviceId }),
-    validateLoadCancellation: () => safeInvoke('debug:validate-load-cancellation'),
-    validateHealth: () => safeInvoke('debug:validate-health'),
-    runStress: (opts) => safeInvoke('debug:run-stress', opts),
-    runSmoke: () => safeInvoke('debug:run-smoke'),
-  },
+  ...(DEBUG_BRIDGE_ENABLED ? {
+    debugButtons: () => {
+      return safeInvoke('debug:buttons')
+    },
+    debug: {
+      getMetrics: () => safeInvoke('debug:metrics'),
+      onMetricsUpdate: (cb) => subscribeIpc('metrics:update', (_e, data) => cb(data)),
+      getHealth: () => safeInvoke('debug:health'),
+      crashView: (serviceId) => safeInvoke('debug:crash-view', { serviceId }),
+      validateLoadCancellation: () => safeInvoke('debug:validate-load-cancellation'),
+      validateHealth: () => safeInvoke('debug:validate-health'),
+      runStress: (opts) => safeInvoke('debug:run-stress', opts),
+      runSmoke: () => safeInvoke('debug:run-smoke'),
+    },
+  } : {}),
   discordToggle: (enabled, clientId) => {
     return safeInvoke('discord:toggle', { enabled, clientId })
   },
@@ -300,29 +352,29 @@ contextBridge.exposeInMainWorld('melo', {
   },
   network: {
     getStatus: () => safeInvoke('network:status'),
-    onChange: (cb) => ipcRenderer.on('network:status', (_e, data) => cb(data)),
+    onChange: (cb) => subscribeIpc('network:status', (_e, data) => cb(data)),
   },
   health: {
-    getStatus: () => safeInvoke('debug:health'),
-    onChange: (cb) => ipcRenderer.on('health:status', (_e, data) => cb(data)),
+    getStatus: () => safeInvoke('health:get-status'),
+    onChange: (cb) => subscribeIpc('health:status', (_e, data) => cb(data)),
   },
   fallback: {
     getStatus: () => safeInvoke('fallback:status'),
-    onChange: (cb) => ipcRenderer.on('fallback:status', (_e, data) => cb(data)),
+    onChange: (cb) => subscribeIpc('fallback:status', (_e, data) => cb(data)),
     retryManual: () => safeInvoke('fallback:retry-manual'),
     safeMode: () => safeInvoke('fallback:safe-mode'),
   },
   gpuInfo: {
     getStatus: () => safeInvoke('gpu:info'),
-    onChange: (cb) => ipcRenderer.on('gpu:status', (_e, data) => cb(data)),
+    onChange: (cb) => subscribeIpc('gpu:status', (_e, data) => cb(data)),
   },
   update: {
-    onChecking: (cb) => ipcRenderer.on('update:checking', cb),
-    onAvailable: (cb) => ipcRenderer.on('update:available', (_e, d) => cb(d)),
-    onNotAvailable: (cb) => ipcRenderer.on('update:not-available', cb),
-    onProgress: (cb) => ipcRenderer.on('update:progress', (_e, d) => cb(d)),
-    onDownloaded: (cb) => ipcRenderer.on('update:downloaded', (_e, d) => cb(d)),
-    onError: (cb) => ipcRenderer.on('update:error', (_e, d) => cb(d)),
+    onChecking: (cb) => subscribeIpc('update:checking', cb),
+    onAvailable: (cb) => subscribeIpc('update:available', (_e, d) => cb(d)),
+    onNotAvailable: (cb) => subscribeIpc('update:not-available', cb),
+    onProgress: (cb) => subscribeIpc('update:progress', (_e, d) => cb(d)),
+    onDownloaded: (cb) => subscribeIpc('update:downloaded', (_e, d) => cb(d)),
+    onError: (cb) => subscribeIpc('update:error', (_e, d) => cb(d)),
     check: () => safeInvoke('update:check'),
     install: () => safeInvoke('update:install'),
   },
@@ -333,6 +385,6 @@ contextBridge.exposeInMainWorld('melo', {
     return safeInvoke('notification:show', opts)
   },
   removeAllListeners: (channel) => {
-    ipcRenderer.removeAllListeners(channel)
+    return safeRemoveAllListeners(channel)
   }
 })

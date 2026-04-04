@@ -4514,6 +4514,368 @@ a:focus-visible {
   width: 148px;
 }
 
+.theme-btn-mono .theme-btn-swatch {
+  background: #000000;
+  border: 1px solid #ffffff;
+}
+
+/* -- Overrides para tema mono ------------------------ */
+
+/* Sin blur en topbar y playerbar */
+[data-theme="mono"] .topbar,
+[data-theme="mono"] .playerbar,
+[data-theme="mono"] .settings-panel {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Bordes mas definidos */
+[data-theme="mono"] .topbar {
+  border-bottom: 1px solid var(--border);
+  box-shadow: none;
+}
+
+[data-theme="mono"] .playerbar {
+  border-top: 1px solid var(--border);
+  box-shadow: none;
+}
+
+/* Sidebar con borde definido */
+[data-theme="mono"] .sidebar {
+  border-right: 1px solid var(--border);
+  background: #000000 !important;
+}
+
+[data-theme="mono"] .topbar,
+[data-theme="mono"] .playerbar,
+[data-theme="mono"] .settings-panel,
+[data-theme="mono"] .settings-content,
+[data-theme="mono"] .settings-section-card {
+  background: #000000 !important;
+}
+
+/* Quitar colores por servicio en mono */
+[data-theme="mono"] .service-item.active,
+[data-theme="mono"] .sidebar-service-item.active {
+  background: #000000 !important;
+  color: #ffffff !important;
+  border: 1px solid #ffffff !important;
+  border-left-color: #ffffff !important;
+}
+
+[data-theme="mono"] .sidebar-service-item.active::before {
+  background: #ffffff !important;
+  box-shadow: none !important;
+}
+
+/* Items del sidebar mas cuadrados */
+[data-theme="mono"] .sidebar-service-item {
+  border-radius: var(--radius-sm);
+  font-family: var(--font);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+[data-theme="mono"] .sidebar-service-item::after,
+[data-theme="mono"] .service-item::after {
+  display: none !important;
+  background: none !important;
+}
+
+[data-theme="mono"] .sidebar-service-item:hover,
+[data-theme="mono"] .service-item:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: #ffffff !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+[data-theme="mono"] .sidebar-service-item.active {
+  background: #000000 !important;
+  border: 1px solid #ffffff !important;
+  box-shadow: none;
+}
+
+/* Dot de servicio en mono - cuadrado pequeno */
+[data-theme="mono"] .service-dot {
+  border-radius: 1px !important;
+  width: 6px;
+  height: 6px;
+}
+
+[data-theme="mono"] .service-dot {
+  background: rgba(255, 255, 255, 0.6) !important;
+  box-shadow: none !important;
+}
+
+[data-theme="mono"] .service-item.active .service-dot,
+[data-theme="mono"] .sidebar-service-item.active .service-dot {
+  background: #ffffff !important;
+  box-shadow: none !important;
+}
+
+[data-theme="mono"] .service-card svg,
+[data-theme="mono"] .service-icon-wrap svg,
+[data-theme="mono"] .service-badge-dot,
+[data-theme="mono"] .toast-icon {
+  color: #ffffff !important;
+  stroke: #ffffff !important;
+}
+
+[data-theme="mono"] .service-card:hover {
+  border-color: #ffffff !important;
+  box-shadow: none !important;
+}
+
+[data-theme="mono"] .service-icon-wrap {
+  background: rgba(255, 255, 255, 0.04) !important;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12) !important;
+}
+
+[data-theme="mono"] .badge-connected,
+[data-theme="mono"] .badge-connected-inline,
+[data-theme="mono"] .integration-status.ok,
+[data-theme="mono"] .integration-status.error {
+  color: #ffffff !important;
+  border-color: rgba(255, 255, 255, 0.3) !important;
+}
+
+[data-theme="mono"] .window-btn-close,
+[data-theme="mono"] .window-btn-minimize,
+[data-theme="mono"] .window-btn-maximize {
+  background: #ffffff !important;
+  opacity: 0.8;
+}
+
+/* Artwork en mono - sin border-radius circular */
+[data-theme="mono"] .playerbar-artwork {
+  border-radius: var(--radius-sm) !important;
+  box-shadow: var(--shadow-artwork);
+}
+
+[data-theme="mono"] .playerbar-artwork.spinning {
+  /* En mono no gira, solo pulsa */
+  animation: none !important;
+  border-radius: var(--radius-sm) !important;
+  box-shadow: var(--shadow-artwork),
+    0 0 0 1px var(--accent);
+}
+
+/* Badge del servicio en mono */
+[data-theme="mono"] .service-badge {
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* Stats cards en mono */
+[data-theme="mono"] .stat-card {
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: #000000 !important;
+}
+
+[data-theme="mono"] .stat-card:hover {
+  border-color: var(--border-strong);
+  transform: none;
+}
+
+[data-theme="mono"] .stat-card-value {
+  font-family: var(--font);
+  letter-spacing: -0.02em;
+  color: #ffffff !important;
+}
+
+[data-theme="mono"] .stat-card-label {
+  font-family: var(--font);
+  letter-spacing: 0.08em;
+  color: #ffffff;
+}
+
+[data-theme="mono"] .stat-emoji,
+[data-theme="mono"] .stats-title,
+[data-theme="mono"] .stats-subtitle,
+[data-theme="mono"] .stats-section-title,
+[data-theme="mono"] .stats-header h2,
+[data-theme="mono"] .top-bar-name,
+[data-theme="mono"] .top-name,
+[data-theme="mono"] .top-rank,
+[data-theme="mono"] .top-count,
+[data-theme="mono"] .stats-inline,
+[data-theme="mono"] .history-meta small,
+[data-theme="mono"] .history-item time,
+[data-theme="mono"] .service-time-value,
+[data-theme="mono"] .service-time-pct,
+[data-theme="mono"] .service-time-name {
+  color: #ffffff !important;
+  background: transparent !important;
+}
+
+[data-theme="mono"] .stats-panel-card,
+[data-theme="mono"] .history-item,
+[data-theme="mono"] .top-bar-wrap,
+[data-theme="mono"] .top-bar-track,
+[data-theme="mono"] .stats-actions button,
+[data-theme="mono"] .period-filter button,
+[data-theme="mono"] .period-filter,
+[data-theme="mono"] .activity-grid-wrapper {
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  background: #000000 !important;
+}
+
+[data-theme="mono"] .stat-card-icon,
+[data-theme="mono"] .stats-view svg,
+[data-theme="mono"] .service-time-dot,
+[data-theme="mono"] .service-time-bar-fill,
+[data-theme="mono"] .top-bar,
+[data-theme="mono"] .top-bar-fill {
+  color: #ffffff !important;
+  stroke: #ffffff !important;
+}
+
+[data-theme="mono"] .stat-card-icon,
+[data-theme="mono"] .stats-view svg {
+  background: transparent !important;
+}
+
+[data-theme="mono"] .service-time-dot,
+[data-theme="mono"] .service-time-bar-fill,
+[data-theme="mono"] .top-bar,
+[data-theme="mono"] .top-bar-fill {
+  background: #ffffff !important;
+}
+
+[data-theme="mono"] .service-time-bar-track,
+[data-theme="mono"] .top-bar-track {
+  background: rgba(255, 255, 255, 0.12) !important;
+}
+
+/* Progress bars en mono */
+[data-theme="mono"] .top-bar-fill {
+  background: #ffffff !important;
+}
+
+[data-theme="mono"] .slider-fill {
+  box-shadow: none;
+}
+
+/* Boton play en mono */
+[data-theme="mono"] .ctrl-play {
+  background: var(--accent);
+  color: #000000;
+  box-shadow: none;
+}
+
+[data-theme="mono"] .ctrl-play:hover {
+  background: var(--accent-hover);
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+
+/* Period filter en stats */
+[data-theme="mono"] .period-btn.active {
+  background: #ffffff;
+  color: #000000;
+  font-family: var(--font);
+}
+
+[data-theme="mono"] .period-btn {
+  font-family: var(--font);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+}
+
+/* Cursor tipo terminal en inputs */
+[data-theme="mono"] input {
+  font-family: var(--font);
+  caret-color: var(--accent);
+  caret-shape: block;
+}
+
+/* Toggle en mono */
+[data-theme="mono"] .toggle {
+  border-radius: 3px;
+}
+
+[data-theme="mono"] .toggle::after {
+  border-radius: 2px;
+  background: #000000;
+}
+
+[data-theme="mono"] .toggle.on {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+/* Settings panel en mono */
+[data-theme="mono"] .settings-panel {
+  border-left: 1px solid var(--border-strong);
+}
+
+[data-theme="mono"] .settings-section-title {
+  font-family: var(--font);
+  letter-spacing: 0.12em;
+}
+
+[data-theme="mono"] .settings-row-label {
+  font-family: var(--font);
+  font-size: 12px;
+}
+
+/* Version badge en mono */
+[data-theme="mono"] .version-badge {
+  font-family: var(--font);
+  border-radius: var(--radius-xs);
+  background: var(--bg-active);
+  border: 1px solid var(--border);
+  color: var(--accent);
+}
+
+[data-theme="mono"] .toast-error,
+[data-theme="mono"] .toast-success,
+[data-theme="mono"] .toast-warn {
+  color: #ffffff !important;
+  border-color: rgba(255, 255, 255, 0.24) !important;
+}
+
+/* Activity grid en stats */
+[data-theme="mono"] .activity-day {
+  border-radius: 1px;
+}
+
+[data-theme="mono"] .activity-day.intensity-1 {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+[data-theme="mono"] .activity-day.intensity-2 {
+  background: rgba(255, 255, 255, 0.40);
+}
+
+[data-theme="mono"] .activity-day.intensity-3 {
+  background: rgba(255, 255, 255, 0.70);
+}
+
+[data-theme="mono"] .activity-day.intensity-4 {
+  background: #ffffff;
+}
+
+/* Scrollbar en mono */
+[data-theme="mono"] ::-webkit-scrollbar-thumb {
+  border-radius: 1px;
+}
+
+/* Toast en mono */
+[data-theme="mono"] .toast {
+  border-radius: var(--radius-sm);
+  font-family: var(--font);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
 ::selection {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
   color: var(--text-primary);

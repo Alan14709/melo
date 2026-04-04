@@ -47,8 +47,9 @@ if [ -n "$SANDBOX_PATH" ]; then
 fi
 
 if [ "$SANDBOX_USABLE" = "0" ]; then
-  FLAGS+=(--no-sandbox --disable-setuid-sandbox)
-  export MELO_SANDBOX_AUTO_DISABLED=1
+  # Namespace-first fallback: intentamos mantener sandbox activo sin setuid.
+  FLAGS+=(--disable-setuid-sandbox --melo-namespace-sandbox-fallback)
+  export MELO_SANDBOX_NAMESPACE_FALLBACK=1
 fi
 
 # Detectar sesión
@@ -86,6 +87,20 @@ fi
 # AppImage: siempre deshabilitar GPU sandbox (FUSE no soporta setuid)
 if [ -n "${APPIMAGE:-}" ]; then
   FLAGS+=(--disable-gpu-sandbox)
+fi
+
+if [ "$SANDBOX_USABLE" = "0" ] && [ "${MELO_ENABLE_NO_SANDBOX_RETRY:-1}" = "1" ]; then
+  "$MELO_BIN" "${FLAGS[@]}" "$@"
+  EXIT_CODE=$?
+
+  # Reintento acotado: solo para fallos tempranos tipicos de sandbox/zygote.
+  if [ "$EXIT_CODE" -eq 133 ] || [ "$EXIT_CODE" -eq 134 ]; then
+    FLAGS+=(--no-sandbox)
+    export MELO_SANDBOX_AUTO_DISABLED=1
+    exec "$MELO_BIN" "${FLAGS[@]}" "$@"
+  fi
+
+  exit "$EXIT_CODE"
 fi
 
 exec "$MELO_BIN" "${FLAGS[@]}" "$@"

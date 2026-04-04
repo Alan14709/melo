@@ -5,6 +5,8 @@ const LOG_DIR = path.join(__dirname, '..', 'logs')
 const RUNTIME_FILE = path.join(LOG_DIR, 'runtime.log')
 const ERROR_FILE = path.join(LOG_DIR, 'error.log')
 const MAX_ROTATED_FILES = 5
+const ROTATE_CHECK_INTERVAL_MS = 1500
+const rotateCheckAt = new Map()
 
 const LEVEL_WEIGHT = {
   debug: 10,
@@ -36,6 +38,11 @@ function rotateFile(filePath) {
 }
 
 function rotateIfNeeded(filePath) {
+  const now = Date.now()
+  const nextCheckAt = rotateCheckAt.get(filePath) || 0
+  if (now < nextCheckAt) return
+  rotateCheckAt.set(filePath, now + ROTATE_CHECK_INTERVAL_MS)
+
   try {
     const stats = fs.statSync(filePath)
     // Limitar tamano para evitar crecimiento indefinido.
@@ -122,10 +129,10 @@ class Logger {
 
     try {
       rotateIfNeeded(RUNTIME_FILE)
-      fs.appendFileSync(RUNTIME_FILE, line, 'utf8')
+      fs.appendFile(RUNTIME_FILE, line, 'utf8', () => {})
       if (level === 'error') {
         rotateIfNeeded(ERROR_FILE)
-        fs.appendFileSync(ERROR_FILE, line, 'utf8')
+        fs.appendFile(ERROR_FILE, line, 'utf8', () => {})
       }
     } catch (_) {}
   }

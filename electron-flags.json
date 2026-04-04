@@ -1,8 +1,5 @@
 {
-  "linux": [
-    "--disable-setuid-sandbox",
-    "--no-sandbox"
-  ],
+  "linux": [],
   "darwin": [],
   "win32": []
 }

@@ -1,6 +1,6 @@
 {
   "name": "melo",
-  "version": "1.6.5",
+  "version": "1.6.6",
   "description": "Tu musica, sin limites",
   "author": "Melo Maintainers",
   "main": "main.js",
@@ -101,8 +101,6 @@
     },
     "appImage": {
       "executableArgs": [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
         "--disable-gpu-sandbox"
       ]
     },

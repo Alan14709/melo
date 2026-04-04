@@ -15,7 +15,7 @@ export default class ErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, errorInfo) {
-    console.error('🚨 ErrorBoundary capturó error:', error, errorInfo)
+    console.error('[ErrorBoundary] captured_error', error, errorInfo)
     // Reportar al proceso principal para observabilidad centralizada.
     window.melo?.reportError?.({
       message: error?.message,
@@ -34,11 +34,10 @@ export default class ErrorBoundary extends React.Component {
 
   render() {
     if (!this.state.hasError) {
-      console.log('✅ ErrorBoundary: renderizando hijos sin error')
       return this.props.children
     }
 
-    console.error('❌ ErrorBoundary mostrando UI de error:', this.state.errorMessage)
+    console.error('[ErrorBoundary] fallback_ui', this.state.errorMessage)
     return (
       <div className="error-boundary" role="alert">
         <h2>Algo salio mal</h2>

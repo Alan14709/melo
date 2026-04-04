@@ -2,30 +2,49 @@
 // Estrategia: hash-based cache en ~/.cache/melo/art/ con file:// URLs
 // Beneficio: reduce transferencia de datos, acelera MPRIS metadata, funciona offline
 
-const fs = require('fs')
+const fsp = require('fs/promises')
 const path = require('path')
 const crypto = require('crypto')
 const os = require('os')
-const { app } = require('electron')
 
 const CACHE_DIR = path.join(os.homedir(), '.cache', 'melo', 'art')
+const DOWNLOAD_TIMEOUT_MS = 5000
+
+async function pathExists(filePath) {
+  try {
+    await fsp.access(filePath)
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
+async function fetchWithTimeout(url, timeoutMs = DOWNLOAD_TIMEOUT_MS) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    return await fetch(url, { signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 class ArtworkCache {
   constructor() {
     this.initialized = false
     this.cache = new Map() // In-memory cache: url -> { path, expires }
+    this.inflight = new Map()
     this.CACHE_TTL = 30 * 24 * 60 * 60 * 1000 // 30 days
   }
 
   // Inicializar directorios y limpiar caché antiguo
   async init() {
     try {
-      if (!fs.existsSync(CACHE_DIR)) {
-        fs.mkdirSync(CACHE_DIR, { recursive: true })
-      }
+      await fsp.mkdir(CACHE_DIR, { recursive: true })
       this.initialized = true
       // Limpiar caché antiguo (archivos más de 30 días)
-      this._cleanOldCache()
+      await this._cleanOldCache()
     } catch (e) {
       console.error('[ArtworkCache] Init failed:', e.message)
       this.initialized = false
@@ -38,17 +57,17 @@ class ArtworkCache {
   }
 
   // Limpiar archivos de caché más antiguos que TTL
-  _cleanOldCache() {
+  async _cleanOldCache() {
     try {
-      const files = fs.readdirSync(CACHE_DIR)
+      const files = await fsp.readdir(CACHE_DIR)
       const now = Date.now()
-      files.forEach((file) => {
+      await Promise.all(files.map(async (file) => {
         const filePath = path.join(CACHE_DIR, file)
-        const stats = fs.statSync(filePath)
-        if (now - stats.mtime.getTime() > this.CACHE_TTL) {
-          fs.unlinkSync(filePath)
+        const stats = await fsp.stat(filePath)
+        if ((now - stats.mtime.getTime()) > this.CACHE_TTL) {
+          await fsp.unlink(filePath)
         }
-      })
+      }))
     } catch (_) {
       // Ignorar errores de limpieza
     }
@@ -58,33 +77,71 @@ class ArtworkCache {
   async get(remoteUrl) {
     if (!this.initialized || !remoteUrl) return remoteUrl // Fallback a URL remota
 
+    const cached = this.cache.get(remoteUrl)
+    if (cached && await pathExists(cached.path)) {
+      return cached.fileUrl
+    }
+
+    if (this.inflight.has(remoteUrl)) {
+      return this.inflight.get(remoteUrl)
+    }
+
+    const pending = this._getOrDownload(remoteUrl)
+    this.inflight.set(remoteUrl, pending)
+
     try {
-      const hash = this._hashUrl(remoteUrl)
-      const filePath = path.join(CACHE_DIR, `${hash}.png`)
-
-      // Si ya está en cache, devolverlo
-      if (fs.existsSync(filePath)) {
-        return `file://${filePath}`
-      }
-
-      // Descargar imagen
-      const response = await fetch(remoteUrl, { timeout: 5000 })
-      if (!response.ok) return remoteUrl
-
-      const buffer = await response.arrayBuffer()
-      fs.writeFileSync(filePath, Buffer.from(buffer))
-
-      return `file://${filePath}`
+      return await pending
     } catch (_) {
       // En caso de error, devolver URL remota
       return remoteUrl
+    } finally {
+      this.inflight.delete(remoteUrl)
+    }
+  }
+
+  async _getOrDownload(remoteUrl) {
+    const hash = this._hashUrl(remoteUrl)
+    const filePath = path.join(CACHE_DIR, `${hash}.png`)
+    const fileUrl = `file://${filePath}`
+
+    if (await pathExists(filePath)) {
+      this.cache.set(remoteUrl, { path: filePath, fileUrl })
+      return fileUrl
+    }
+
+    const response = await fetchWithTimeout(remoteUrl, DOWNLOAD_TIMEOUT_MS)
+    if (!response.ok) return remoteUrl
+
+    const buffer = await response.arrayBuffer()
+    await fsp.writeFile(filePath, Buffer.from(buffer))
+    this.cache.set(remoteUrl, { path: filePath, fileUrl })
+
+    return fileUrl
+  }
+
+  async _clearDirectory(dirPath) {
+    if (!(await pathExists(dirPath))) return
+    const files = await fsp.readdir(dirPath)
+    await Promise.all(files.map(async (file) => {
+      await fsp.unlink(path.join(dirPath, file)).catch(() => {})
+    }))
+  }
+
+  async _resetDirectory(dirPath) {
+    await this._clearDirectory(dirPath)
+    await fsp.mkdir(dirPath, { recursive: true })
+  }
+
+  async ensureReady() {
+    if (!this.initialized) {
+      await this.init()
     }
   }
 
   // Pre-caché (descargar en background sin esperar)
   cacheInBackground(remoteUrl) {
     if (!this.initialized || !remoteUrl) return
-    setImmediate(() => {
+    queueMicrotask(() => {
       this.get(remoteUrl).catch(() => {})
     })
   }
@@ -92,11 +149,9 @@ class ArtworkCache {
   // Limpiar todo el caché (para desarrollo/debugging)
   async clear() {
     try {
-      if (fs.existsSync(CACHE_DIR)) {
-        fs.rmSync(CACHE_DIR, { recursive: true })
-        fs.mkdirSync(CACHE_DIR, { recursive: true })
-      }
+      await this._resetDirectory(CACHE_DIR)
       this.cache.clear()
+      this.inflight.clear()
     } catch (e) {
       console.error('[ArtworkCache] Clear failed:', e.message)
     }

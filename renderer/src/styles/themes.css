@@ -176,3 +176,88 @@
   --artwork-tone-1: color-mix(in srgb, var(--accent, #fc3c44) 34%, transparent);
   --artwork-tone-2: color-mix(in srgb, var(--bg-card, #1c1c1e) 40%, transparent);
 }
+
+/* -- Tema Mono (Terminal/Hacker) -------------------------------- */
+[data-theme="mono"] {
+  /* Fondos */
+  --bg-base: #000000;
+  --bg-sidebar: rgba(0, 0, 0, 0.98);
+  --bg-topbar: rgba(0, 0, 0, 0.98);
+  --bg-playerbar: rgba(0, 0, 0, 0.98);
+  --bg-card: rgba(0, 0, 0, 1);
+  --bg-card-hover: rgba(255, 255, 255, 0.06);
+  --bg-elevated: rgba(0, 0, 0, 1);
+  --bg-overlay: rgba(0, 0, 0, 0.92);
+  --bg-hover: rgba(255, 255, 255, 0.04);
+  --bg-active: rgba(255, 255, 255, 0.08);
+  --bg-selected: rgba(255, 255, 255, 0.10);
+
+  /* Glass surfaces - sin glass, bordes solidos */
+  --glass-bg: rgba(255, 255, 255, 0.03);
+  --glass-bg-strong: rgba(255, 255, 255, 0.05);
+  --glass-border: rgba(255, 255, 255, 0.12);
+  --glass-border-strong: rgba(255, 255, 255, 0.20);
+  --glass-highlight: rgba(255, 255, 255, 0.05);
+  --glass-blur: blur(0px);
+  --glass-blur-heavy: blur(0px);
+
+  /* Texto */
+  --text-primary: rgba(255, 255, 255, 0.95);
+  --text-secondary: rgba(255, 255, 255, 0.78);
+  --text-tertiary: rgba(255, 255, 255, 0.62);
+  --text-quaternary: rgba(255, 255, 255, 0.46);
+  --text-accent: #ffffff;
+
+  /* Accent claro para contraste sobre fondo oscuro */
+  --accent: #ffffff;
+  --accent-hover: #ffffff;
+  --accent-active: rgba(255, 255, 255, 0.85);
+  --accent-subtle: rgba(255, 255, 255, 0.08);
+  --accent-glow: rgba(255, 255, 255, 0.24);
+  --accent-rgb: 255, 255, 255;
+
+  /* Shell mono en color solido (sin degradados visibles) */
+  --ui-grad-1: rgba(0, 0, 0, 0.98);
+  --ui-grad-2: rgba(0, 0, 0, 0.98);
+  --ui-grad-3: rgba(0, 0, 0, 0.98);
+  --ui-chrome-top: rgba(0, 0, 0, 0.98);
+  --ui-chrome-bottom: rgba(0, 0, 0, 0.98);
+  --ui-sheen: rgba(255, 255, 255, 0.08);
+  --ui-border-glow: rgba(255, 255, 255, 0.20);
+  --artwork-tone-1: rgba(255, 255, 255, 0.22);
+  --artwork-tone-2: rgba(255, 255, 255, 0.16);
+
+  /* Bordes definidos */
+  --border: rgba(255, 255, 255, 0.10);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --border-subtle: rgba(255, 255, 255, 0.05);
+  --border-accent: rgba(255, 255, 255, 0.30);
+
+  /* Sombras - sin color, solo opacidad */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.8);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.9);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.95);
+  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 1);
+  --shadow-artwork: 0 4px 20px rgba(0, 0, 0, 0.9),
+    0 0 0 1px rgba(255, 255, 255, 0.08);
+  --shadow-glow: 0 0 16px rgba(255, 255, 255, 0.12);
+
+  /* Tipografia monospace para el tema */
+  --font: 'SF Mono', 'Fira Code', 'JetBrains Mono',
+    'Cascadia Code', 'Consolas', monospace;
+
+  /* Radios reducidos - estetica mas cuadrada */
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 7px;
+  --radius-xl: 10px;
+  --radius-2xl: 14px;
+  --radius-full: 3px;
+
+  /* Transiciones mas rapidas en mono */
+  --transition-fast: 100ms linear;
+  --transition-base: 150ms linear;
+  --transition-slow: 250ms linear;
+  --transition-spring: 250ms linear;
+}

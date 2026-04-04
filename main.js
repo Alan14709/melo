@@ -38,7 +38,15 @@ const logger = require('./services/Logger')
 // CONFIGURACIÓN DE PERSISTENCIA DE SESIÓN
 // ============================================================================
 // Configurar userData path ANTES de que la app esté lista.
-const MELO_USER_DATA_PATH = path.join(app.getPath('appData'), 'Melo')
+const sanitizeProfileSuffix = (value) => String(value || '')
+  .trim()
+  .replace(/[^a-zA-Z0-9._-]+/g, '-')
+  .replace(/^-+|-+$/g, '')
+  .slice(0, 48)
+
+const testProfileSuffix = sanitizeProfileSuffix(process.env.MELO_TEST_PROFILE_SUFFIX)
+const userDataFolderName = testProfileSuffix ? `Melo-${testProfileSuffix}` : 'Melo'
+const MELO_USER_DATA_PATH = path.join(app.getPath('appData'), userDataFolderName)
 app.setPath('userData', MELO_USER_DATA_PATH)
 
 // SESIÓN GLOBAL PERSISTENTE ÚNICA - para UI principal
@@ -62,6 +70,8 @@ function getPartitionForService(serviceId) {
 // Modo debug de produccion activable por variable de entorno.
 const DEBUG_MODE = process.env.DEBUG === '1' || process.env.DEBUG === 'true'
 if (DEBUG_MODE) logger.setLevel('debug')
+const DEBUG_IPC_ENABLED = process.env.MELO_DISABLE_DEBUG_IPC !== '1'
+  && (process.env.MELO_ENABLE_DEBUG_IPC === '1' || !app.isPackaged)
 
 // GPU Fallback - 3-tier progressive system
 const GPU_FALLBACK_TIERS = {
@@ -101,6 +111,11 @@ const fallbackStatus = {
   message: null,
   mitigated: false,
   updatedAt: new Date().toISOString(),
+}
+const CRASH_SIGNAL_DEDUP_WINDOW_MS = Number(process.env.MELO_CRASH_SIGNAL_DEDUP_MS || 2000)
+const crashSignalState = {
+  lastKey: null,
+  lastAt: 0,
 }
 const GPU_STARTUP_PROBE_DELAY_MS = Number(process.env.MELO_GPU_STARTUP_PROBE_DELAY_MS || 8000)
 
@@ -443,6 +458,40 @@ function triggerGPUTierFallback(source, details = {}) {
   })
 }
 
+function shouldProcessCrashSignal(source, details = {}) {
+  const now = Date.now()
+  const reason = String(details?.reason || 'unknown').toLowerCase()
+  const exitCode = Number(details?.exitCode)
+  const processType = String(details?.processType || details?.type || '').toLowerCase()
+  const serviceId = String(details?.serviceId || details?.name || 'global')
+
+  const gpuLike = String(source || '').toLowerCase().includes('gpu')
+    || processType === 'gpu'
+    || exitCode === 1002
+    || reason === 'launch-failed'
+    || reason === 'crashed'
+
+  if (!gpuLike) {
+    return false
+  }
+
+  const key = `${processType || 'n/a'}:${reason}:${Number.isFinite(exitCode) ? exitCode : 'n/a'}:${serviceId}`
+  if (crashSignalState.lastKey === key && (now - crashSignalState.lastAt) <= CRASH_SIGNAL_DEDUP_WINDOW_MS) {
+    logger.warn('GPUManager', 'crash_signal_deduped_main', {
+      source,
+      key,
+      reason,
+      exitCode,
+      windowMs: CRASH_SIGNAL_DEDUP_WINDOW_MS,
+    })
+    return false
+  }
+
+  crashSignalState.lastKey = key
+  crashSignalState.lastAt = now
+  return true
+}
+
 function getRuntimeDiagnostics(extra = {}) {
   const gpuInfo = gpuManager.getGPUStatus()
   const sandboxInfo = gpuInfo.environment?.sandbox || {}
@@ -686,12 +735,23 @@ if (gpuTier === GPU_FALLBACK_TIERS.NATIVE_GPU) {
 }
 
 if (isLinux) {
-  // Detectar Wayland y forzar XWayland por compatibilidad.
+  // Resolver plataforma Ozone sin contradecir flags previos del launcher.
   const isWayland = process.env.WAYLAND_DISPLAY
     || process.env.XDG_SESSION_TYPE === 'wayland'
-  if (isWayland) {
-    app.commandLine.appendSwitch('ozone-platform', 'x11')
-    logger.info('Main', 'wayland_detected', { mode: 'x11' })
+  const hasOzoneSwitch = app.commandLine.hasSwitch('ozone-platform')
+  if (!hasOzoneSwitch) {
+    if (isWayland && !process.env.DISPLAY) {
+      app.commandLine.appendSwitch('ozone-platform', 'wayland')
+      logger.info('Main', 'wayland_detected', { mode: 'wayland', source: 'main-default' })
+    } else if (isWayland) {
+      app.commandLine.appendSwitch('ozone-platform', 'x11')
+      logger.info('Main', 'wayland_detected', { mode: 'x11', source: 'main-xwayland' })
+    }
+  } else {
+    logger.info('Main', 'ozone_platform_preserved', {
+      mode: app.commandLine.getSwitchValue('ozone-platform') || 'set-without-value',
+      source: 'launcher-or-cli',
+    })
   }
 
   // Sandbox fallback is applied exclusively by GPU Manager.
@@ -708,15 +768,20 @@ if (process.platform === 'darwin') {
 
 app.on('gpu-process-crashed', (_event, killed) => {
   const currentTier = getEffectiveGPUTier()
+  const exitCode = Number(_event?.exitCode)
   logger.error('Main', 'gpu_process_crashed', { 
     killed: Boolean(killed), 
     currentTier,
-    exitCode: _event?.exitCode,
+    exitCode,
   })
+
+  if (!shouldProcessCrashSignal('gpu-process-crashed', { reason: 'gpu-process-crashed', exitCode, processType: 'gpu' })) {
+    return
+  }
   
   triggerGPUTierFallback('gpu-process-crashed', {
     killed: Boolean(killed),
-    exitCode: _event?.exitCode,
+    exitCode,
   })
 })
 
@@ -734,6 +799,15 @@ app.on('child-process-gone', (_event, details) => {
   })
 
   if (exitCode === 1002 || reason === 'launch-failed' || reason === 'crashed') {
+    if (!shouldProcessCrashSignal('child-process-gone', {
+      reason,
+      exitCode,
+      processType,
+      serviceId: details?.serviceName || details?.name || 'gpu',
+    })) {
+      return
+    }
+
     triggerGPUTierFallback('child-process-gone', {
       reason,
       exitCode,
@@ -753,6 +827,15 @@ app.on('render-process-gone', (_event, _webContents, details) => {
   })
 
   if (exitCode === 1002 || reason === 'launch-failed') {
+    if (!shouldProcessCrashSignal('app-render-process-gone', {
+      reason,
+      exitCode,
+      processType: 'renderer',
+      serviceId: _webContents?.id || 'app',
+    })) {
+      return
+    }
+
     triggerGPUTierFallback('app-render-process-gone', {
       reason,
       exitCode,
@@ -823,6 +906,7 @@ let lastProcessedTrackKey = null
 let processMetricsTimer = null
 let metricsBroadcastTimer = null
 let networkStatusTimer = null
+let debugSessionCheckTimer = null
 let isOnline = true
 let isCleaningUp = false
 let isExecutingScript = false
@@ -836,6 +920,7 @@ const loadAbortControllers = new Map()
 const loadStateByService = new Map()
 const crashedServices = new Set()
 const pendingViewDestroy = new WeakSet()
+const destroyStateByService = new Map()
 const viewMetrics = {
   switches: 0,
   crashes: 0,
@@ -958,6 +1043,50 @@ const ALLOWED_SERVICE_ORIGINS = new Set(
   Object.values(SERVICES).map((service) => new URL(service.url).origin)
 )
 
+const ALLOWED_SERVICE_HOSTNAMES = new Set([
+  ...Object.values(SERVICES).map((service) => new URL(service.url).hostname),
+  'youtube.com',
+  'www.youtube.com',
+  'spotify.com',
+  'accounts.spotify.com',
+  'tidal.com',
+  'www.tidal.com',
+  'listen.tidal.com',
+  'deezer.com',
+  'www.deezer.com',
+])
+
+function isAllowedServiceHostname(hostname = '') {
+  const host = String(hostname || '').toLowerCase().trim()
+  if (!host) return false
+
+  for (const allowedHost of ALLOWED_SERVICE_HOSTNAMES) {
+    if (host === allowedHost || host.endsWith(`.${allowedHost}`)) return true
+  }
+
+  return false
+}
+
+function isAllowedServiceUrlString(value = '') {
+  try {
+    const parsed = new URL(String(value || ''))
+    if (ALLOWED_SERVICE_ORIGINS.has(parsed.origin)) return true
+    return isAllowedServiceHostname(parsed.hostname)
+  } catch (_) {
+    return false
+  }
+}
+
+function isAllowedServicePermissionOrigin(value = '') {
+  try {
+    const parsed = new URL(String(value || ''))
+    if (parsed.protocol !== 'https:') return false
+    return isAllowedServiceHostname(parsed.hostname)
+  } catch (_) {
+    return false
+  }
+}
+
 // ============================================================================
 // CONFIGURAR PERMISOS DE MEDIA PARA LA SESIÓN GLOBAL
 // Esto permite a servicios web usar audio, video, cámara, micrófono, fullscreen
@@ -967,38 +1096,18 @@ function configureGlobalSessionPermissions() {
     const globalSess = getGlobalSession()
     if (!globalSess) return
 
-    // Permitir permisos de media a todos los orígenes de servicios
-    const serviceOrigins = [
-      'music.apple.com',
-      'music.youtube.com',
-      'open.spotify.com',
-      'tidal.com',
-      'www.deezer.com',
-      'deezer.com',
-    ]
-
     globalSess.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
       if (permission !== 'media' && permission !== 'fullscreen' && permission !== 'clipboard-read' && permission !== 'clipboard-write') {
         return false
       }
-      try {
-        const req = new URL(requestingOrigin || '')
-        return serviceOrigins.some((origin) => req.hostname.includes(origin))
-      } catch (_) {
-        return false
-      }
+      return isAllowedServicePermissionOrigin(requestingOrigin)
     })
 
     globalSess.setPermissionRequestHandler((webContents, permission, callback, details) => {
       const requestingUrl = details?.requestingUrl || webContents?.getURL?.() || ''
       let allowed = permission === 'media' || permission === 'fullscreen' || permission === 'clipboard-read' || permission === 'clipboard-write'
 
-      try {
-        const req = new URL(requestingUrl)
-        if (!serviceOrigins.some((origin) => req.hostname.includes(origin))) {
-          allowed = false
-        }
-      } catch (_) {
+      if (!isAllowedServicePermissionOrigin(requestingUrl)) {
         allowed = false
       }
 
@@ -1012,7 +1121,7 @@ function configureGlobalSessionPermissions() {
 
     logger.info('Session', 'global_permissions_configured', {
       partition: GLOBAL_SESSION_PARTITION,
-      serviceOrigins: serviceOrigins.length,
+      allowedHostnames: ALLOWED_SERVICE_HOSTNAMES.size,
     })
   } catch (error) {
     logger.warn('Session', 'permission_configuration_failed', {
@@ -1025,16 +1134,6 @@ function configureServiceSessionPermissions() {
   // Configurar permisos para TODAS las sesiones de servicios
   // Cada servicio tiene su propia partición con acceso a media/fullscreen
   try {
-    const serviceOrigins = [
-      'music.apple.com',
-      'music.youtube.com',
-      'open.spotify.com',
-      'listen.tidal.com',
-      'tidal.com',
-      'www.deezer.com',
-      'deezer.com',
-    ]
-
     // Configurar permisos para cada partición de servicio
     Object.values(SERVICE_PARTITIONS).forEach((partition) => {
       const serviceSession = session.fromPartition(partition)
@@ -1044,24 +1143,14 @@ function configureServiceSessionPermissions() {
         if (permission !== 'media' && permission !== 'fullscreen' && permission !== 'clipboard-read' && permission !== 'clipboard-write') {
           return false
         }
-        try {
-          const req = new URL(requestingOrigin || '')
-          return serviceOrigins.some((origin) => req.hostname.includes(origin))
-        } catch (_) {
-          return false
-        }
+        return isAllowedServicePermissionOrigin(requestingOrigin)
       })
 
       serviceSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
         const requestingUrl = details?.requestingUrl || webContents?.getURL?.() || ''
         let allowed = permission === 'media' || permission === 'fullscreen' || permission === 'clipboard-read' || permission === 'clipboard-write'
 
-        try {
-          const req = new URL(requestingUrl)
-          if (!serviceOrigins.some((origin) => req.hostname.includes(origin))) {
-            allowed = false
-          }
-        } catch (_) {
+        if (!isAllowedServicePermissionOrigin(requestingUrl)) {
           allowed = false
         }
 
@@ -1205,7 +1294,9 @@ function getViewMetrics() {
 function trackViewCount() {
   const count = Object.keys(views).length
   viewMetrics.maxViewCount = Math.max(viewMetrics.maxViewCount, count)
-  if (count > 1) viewMetrics.ghostViewViolations += 1
+  if (count > 1 && !isSwitchingService && pendingSwitchCount === 0) {
+    viewMetrics.ghostViewViolations += 1
+  }
 }
 
 function cancelPendingLoad(serviceId) {
@@ -1305,6 +1396,20 @@ function armSwitchLockTimeout(timeoutMs = 8000) {
   }, timeoutMs)
 }
 
+function getSwitchLockTimeoutMs(serviceId, { coldStart = false } = {}) {
+  const envTimeout = Number(process.env.MELO_SWITCH_LOCK_TIMEOUT_MS || 0)
+  if (Number.isFinite(envTimeout) && envTimeout >= 4000) {
+    return Math.min(envTimeout, 20000)
+  }
+
+  const slowServices = new Set(['appleMusic', 'youtubeMusic', 'tidal'])
+  let timeoutMs = coldStart ? 11000 : 8000
+  if (slowServices.has(serviceId)) {
+    timeoutMs = Math.max(timeoutMs, 12000)
+  }
+  return timeoutMs
+}
+
 function getOrCreateLoadState(serviceId) {
   if (!loadStateByService.has(serviceId)) {
     loadStateByService.set(serviceId, {
@@ -1349,7 +1454,7 @@ async function loadServiceURLWithGuard(
   try {
     while (state.retryCount <= maxRetries) {
       try {
-        console.log('LOADING URL', { serviceId, url, attempt: state.retryCount + 1 })
+        logger.debug('BrowserView', 'loading_url', { serviceId, url, attempt: state.retryCount + 1 })
         view.__meloServiceId = serviceId
         const result = await safeLoadURL(view, url, abortSignal, timeoutMs)
         if (!result.ok) {
@@ -1434,6 +1539,15 @@ function setupViewLifecycleHandlers(view, serviceId, url) {
     }
 
     if (exitCode === 1002) {
+      if (!shouldProcessCrashSignal('browserview', {
+        reason,
+        exitCode,
+        processType: 'renderer',
+        serviceId,
+      })) {
+        return
+      }
+
       triggerGPUTierFallback('browserview', {
         ...diagnostics,
       })
@@ -1454,7 +1568,7 @@ function setupViewLifecycleHandlers(view, serviceId, url) {
 
   view.webContents.removeAllListeners('did-fail-load')
   view.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
-    console.error('LOAD FAILED', { serviceId, errorCode, errorDescription })
+    logger.error('BrowserView', 'load_failed', { serviceId, errorCode, errorDescription })
 
     // ERR_ABORTED (-3) es esperable al cancelar cargas por switch rapido.
     if (Number(errorCode) === -3) {
@@ -1593,7 +1707,9 @@ async function getMemorySnapshotMb() {
 }
 
 function ensureTestResultsDir() {
-  const dir = path.join(__dirname, 'test-results')
+  const dir = app.isPackaged
+    ? path.join(app.getPath('userData'), 'test-results')
+    : path.join(process.cwd(), 'test-results')
   try {
     fs.mkdirSync(dir, { recursive: true })
   } catch (_) {}
@@ -1783,25 +1899,62 @@ async function runSmokeValidation() {
     }
   }
 
+  // Espera a que la cola de switches termine antes del preflight para evitar falsos negativos.
+  await switchQueue.catch(() => {})
+
   const waitForRendererReady = async (timeoutMs = 10000) => {
     const startedAt = Date.now()
+    let stableReadyChecks = 0
     while (Date.now() - startedAt < timeoutMs) {
-      const isReady = Boolean(
-        activeView
-        && activeView.webContents
-        && !activeView.webContents.isDestroyed()
-        && playerController.state === PLAYER_STATE.READY
-        && playerController.activeServiceId
+      const viewMetrics = getViewMetrics()
+      const hasRendererBoot = Boolean(viewMetrics?.performance?.rendererReadyAt)
+      const hasLiveView = Object.values(views).some(
+        (view) => Boolean(view && view.webContents && !view.webContents.isDestroyed())
       )
-      if (isReady) return true
+
+      const isReady = Boolean(
+        (
+          activeView
+          && activeView.webContents
+          && !activeView.webContents.isDestroyed()
+          && playerController.state === PLAYER_STATE.READY
+          && playerController.activeServiceId
+        )
+        || (
+          hasRendererBoot
+          && hasLiveView
+          && playerController.activeServiceId
+        )
+      )
+
+      // Evita marcar ready con estados transitorios de un solo tick.
+      if (isReady) {
+        stableReadyChecks += 1
+        if (stableReadyChecks >= 2) return true
+      } else {
+        stableReadyChecks = 0
+      }
+
       await sleep(200)
     }
     return false
   }
 
-  const rendererReady = await waitForRendererReady(10000)
+  const configuredTimeout = Number(process.env.MELO_SMOKE_RENDERER_READY_TIMEOUT_MS || 0)
+  const metricsSnapshot = getViewMetrics()
+  const startupDurationMs = Number(metricsSnapshot?.performance?.startupDurationMs || 0)
+  const adaptiveTimeoutMs = configuredTimeout > 0
+    ? configuredTimeout
+    : Math.max(15000, Math.min(30000, startupDurationMs > 0 ? startupDurationMs * 12 : 18000))
+
+  const rendererReady = await waitForRendererReady(adaptiveTimeoutMs)
   if (!rendererReady) {
-    errors.push({ phase: 'preflight', message: 'invalid_environment_renderer_not_ready' })
+    errors.push({
+      phase: 'preflight',
+      message: 'invalid_environment_renderer_not_ready',
+      timeoutMs: adaptiveTimeoutMs,
+      startupDurationMs,
+    })
   }
 
   for (const action of ['play', 'play', 'next']) {
@@ -1866,23 +2019,30 @@ function destroyBrowserViewInstance(view, serviceId = 'unknown', options = {}) {
   if (!view) return
   const webContents = view.webContents
   const isLoading = Boolean(webContents && !webContents.isDestroyed() && webContents.isLoading())
-  console.log('Destroy attempt', { serviceId, isLoading })
+  const destroyState = serviceId ? destroyStateByService.get(serviceId) : null
+  logger.debug('BrowserView', 'destroy_attempt', { serviceId, isLoading })
+
+  if (serviceId && destroyState === 'destroying' && deferWhileLoading) {
+    logger.debug('BrowserView', 'destroy_skip_already_destroying', { serviceId })
+    return
+  }
 
   if (deferWhileLoading && isLoading) {
     if (pendingViewDestroy.has(view)) {
-      console.warn('Skipping destroy: still loading')
+      logger.warn('BrowserView', 'destroy_skip_loading_pending', { serviceId })
       return
     }
 
+    if (serviceId) destroyStateByService.set(serviceId, 'deferred')
     pendingViewDestroy.add(view)
     logger.warn('BrowserView', 'destroy_deferred_loading', { serviceId })
-    console.warn('Skipping destroy: still loading')
 
     let finalized = false
     const finalize = () => {
       if (finalized) return
       finalized = true
       pendingViewDestroy.delete(view)
+      if (serviceId) destroyStateByService.set(serviceId, 'destroying')
       destroyBrowserViewInstance(view, serviceId, { deferWhileLoading: false })
     }
 
@@ -1896,6 +2056,7 @@ function destroyBrowserViewInstance(view, serviceId = 'unknown', options = {}) {
 
   if (serviceId) cancelPendingLoad(serviceId)
   if (serviceId) loadStateByService.delete(serviceId)
+  if (serviceId) destroyStateByService.set(serviceId, 'destroying')
 
   try {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1910,13 +2071,17 @@ function destroyBrowserViewInstance(view, serviceId = 'unknown', options = {}) {
       webContents.destroy()
     }
   } catch (error) {
-    console.warn('Destroy failed safely', error)
+    logger.warn('BrowserView', 'destroy_failed_safely', { serviceId, message: error?.message || 'unknown_error' })
   }
 
   if (serviceId && views[serviceId] === view) {
     delete views[serviceId]
     viewMetrics.viewsDestroyed += 1
     trackViewCount()
+  }
+
+  if (serviceId && views[serviceId] !== view) {
+    destroyStateByService.delete(serviceId)
   }
 
   if (serviceId && views[serviceId]) {
@@ -1996,6 +2161,7 @@ async function cleanupAllResources() {
     'debug:run-smoke',
     'stats:getHistory',
     'stats:getSummary',
+    'health:get-status',
     'network:status',
     'player:getProgress',
     'stats:getWrapped',
@@ -2080,6 +2246,10 @@ function createMainWindow() {
       webSecurity: true,
     },
   })
+  try {
+    if (typeof mainWindow.setMaxListeners === 'function') mainWindow.setMaxListeners(40)
+    if (typeof mainWindow.webContents?.setMaxListeners === 'function') mainWindow.webContents.setMaxListeners(80)
+  } catch (_) {}
   logSessionPersistence('main_window', mainWindow.webContents.session, GLOBAL_SESSION_PARTITION)
   // UA Chromium estable para reducir inconsistencias de playback en servicios web.
   mainWindow.webContents.setUserAgent(CHROME_STABLE_USER_AGENT)
@@ -2162,6 +2332,15 @@ function createMainWindow() {
     })
 
     if (exitCode === 1002) {
+      if (!shouldProcessCrashSignal('main-window', {
+        reason,
+        exitCode,
+        processType: 'renderer',
+        serviceId: 'main-window',
+      })) {
+        return
+      }
+
       triggerGPUTierFallback('main-window', {
         ...diagnostics,
       })
@@ -2532,6 +2711,10 @@ function createMiniPlayer() {
       webSecurity: true,
     }
   })
+  try {
+    if (typeof miniWindow.setMaxListeners === 'function') miniWindow.setMaxListeners(30)
+    if (typeof miniWindow.webContents?.setMaxListeners === 'function') miniWindow.webContents.setMaxListeners(60)
+  } catch (_) {}
   logSessionPersistence('mini_window', miniWindow.webContents.session, GLOBAL_SESSION_PARTITION)
 
   const { width, height } = require('electron').screen
@@ -2599,6 +2782,9 @@ async function createServiceView(serviceId, url) {
       allowRunningInsecureContent: false,
     },
   })
+  try {
+    if (typeof view.webContents?.setMaxListeners === 'function') view.webContents.setMaxListeners(60)
+  } catch (_) {}
   logSessionPersistence(`service_view:${serviceId}`, view.webContents.session, servicePartition)
 
   view.setBackgroundColor('#000000')
@@ -2695,8 +2881,7 @@ async function createServiceView(serviceId, url) {
 
   view.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
     try {
-      const target = new URL(targetUrl)
-      if (ALLOWED_SERVICE_ORIGINS.has(target.origin)) {
+      if (isAllowedServiceUrlString(targetUrl)) {
         return { action: 'allow' }
       }
       shell.openExternal(targetUrl).catch(() => {})
@@ -2709,8 +2894,7 @@ async function createServiceView(serviceId, url) {
   view.webContents.removeAllListeners('will-navigate')
   view.webContents.on('will-navigate', (event, targetUrl) => {
     try {
-      const target = new URL(targetUrl)
-      if (!ALLOWED_SERVICE_ORIGINS.has(target.origin)) {
+      if (!isAllowedServiceUrlString(targetUrl)) {
         event.preventDefault()
         shell.openExternal(targetUrl).catch(() => {})
       }
@@ -2729,6 +2913,7 @@ async function createServiceView(serviceId, url) {
 
   view.webContents.on('destroyed', () => {
     webContentsToService.delete(view.webContents.id)
+    destroyStateByService.delete(serviceId)
     delete views[serviceId]
     if (playerController.activeServiceId === serviceId) {
       playerController.setState(PLAYER_STATE.NOT_LOADED, `destroyed ${serviceId}`)
@@ -2761,6 +2946,22 @@ async function createServiceView(serviceId, url) {
     }
   } catch (error) {
     if (error?.message === 'load_cancelled') {
+      const wasExplicitAbort = Boolean(loadController?.signal?.aborted)
+      let currentUrl = ''
+      try {
+        currentUrl = view.webContents?.getURL?.() || ''
+      } catch (_) {}
+
+      const isAllowedRedirect = !wasExplicitAbort && isAllowedServiceUrlString(currentUrl)
+      if (isAllowedRedirect) {
+        logger.warn('BrowserView', 'load_cancelled_allowed_redirect', {
+          serviceId,
+          requestedUrl: url,
+          currentUrl,
+        })
+        return view
+      }
+
       destroyBrowserViewInstance(view, serviceId)
       throw error
     }
@@ -2859,9 +3060,13 @@ async function switchToService(serviceId, url, serviceData) {
       return
     }
 
+    const switchTimeoutMs = getSwitchLockTimeoutMs(serviceId, {
+      coldStart: !views[serviceId] || views[serviceId]?.webContents?.isDestroyed?.(),
+    })
+
     isSwitchingService = true
     currentSwitchTarget = serviceId
-    armSwitchLockTimeout(8000)
+    armSwitchLockTimeout(switchTimeoutMs)
     const switchStartedAt = Date.now()
 
     const previousServiceId = playerController.activeServiceId
@@ -2880,7 +3085,7 @@ async function switchToService(serviceId, url, serviceData) {
             }
             activeView.webContents.once('did-finish-load', finish)
             activeView.webContents.once('did-fail-load', finish)
-            setTimeout(finish, 8000)
+            setTimeout(finish, switchTimeoutMs)
           })
         }
       } catch (_) {}
@@ -2984,10 +3189,10 @@ function registerIpcHandlers() {
     }
     const { serviceId, url, service } = payload
     try {
-      const parsed = new URL(url)
-      // Hardening: bloquear URLs fuera de los origenes de servicios permitidos.
-      if (!ALLOWED_SERVICE_ORIGINS.has(parsed.origin)) {
-        logger.warn('IPC', 'blocked_service_switch_origin', { origin: parsed.origin, serviceId })
+      // Hardening: bloquear URLs fuera de hosts/origenes de servicios permitidos.
+      if (!isAllowedServiceUrlString(url)) {
+        const parsed = new URL(url)
+        logger.warn('IPC', 'blocked_service_switch_origin', { origin: parsed.origin, hostname: parsed.hostname, serviceId })
         return { success: false, error: 'blocked_origin' }
       }
     } catch {
@@ -3124,25 +3329,34 @@ function registerIpcHandlers() {
     toggleMiniPlayer()
   })
 
-  ipcMain.handle('debug:buttons', async () => {
-    if (!activeView?.webContents) return []
-    if (activeView.webContents.isDestroyed()) return []
-    try {
-      return await executeInWebContents(activeView.webContents, `
-        [...document.querySelectorAll('button')]
-          .filter(b => b.getAttribute('aria-label'))
-          .map(b => ({
-            label: b.getAttribute('aria-label'),
-            disabled: b.disabled,
-            visible: b.offsetParent !== null
-          }))
-      `, { requireReady: false, retries: 1, label: 'debug-buttons' })
-    } catch (_) {
-      return []
-    }
+  ipcMain.handle('health:get-status', () => {
+    if (!healthMonitor) return { status: 'unknown', reason: 'not_initialized' }
+    return healthMonitor.check()
   })
 
-  ipcMain.handle('debug:metrics', () => getViewMetrics())
+  if (DEBUG_IPC_ENABLED) {
+    ipcMain.handle('debug:buttons', async () => {
+      if (!activeView?.webContents) return []
+      if (activeView.webContents.isDestroyed()) return []
+      try {
+        return await executeInWebContents(activeView.webContents, `
+          [...document.querySelectorAll('button')]
+            .filter(b => b.getAttribute('aria-label'))
+            .map(b => ({
+              label: b.getAttribute('aria-label'),
+              disabled: b.disabled,
+              visible: b.offsetParent !== null
+            }))
+        `, { requireReady: false, retries: 1, label: 'debug-buttons' })
+      } catch (_) {
+        return []
+      }
+    })
+  }
+
+  if (DEBUG_IPC_ENABLED) {
+    ipcMain.handle('debug:metrics', () => getViewMetrics())
+  }
   ipcMain.handle('fallback:status', () => ({ ...fallbackStatus }))
   ipcMain.handle('gpu:info', () => gpuManager.getGPUStatus())
   ipcMain.handle('fallback:retry-manual', async () => {
@@ -3178,41 +3392,43 @@ function registerIpcHandlers() {
     return { success: true }
   })
 
-  ipcMain.handle('debug:health', () => {
-    if (!healthMonitor) return { status: 'unknown', reason: 'not_initialized' }
-    return healthMonitor.check()
-  })
+  if (DEBUG_IPC_ENABLED) {
+    ipcMain.handle('debug:health', () => {
+      if (!healthMonitor) return { status: 'unknown', reason: 'not_initialized' }
+      return healthMonitor.check()
+    })
 
-  ipcMain.handle('debug:crash-view', (_event, payload = {}) => {
-    const serviceId = payload?.serviceId
-    if (!isNonEmptyString(serviceId)) {
-      return { success: false, error: 'invalid_serviceId' }
-    }
-
-    const view = views[serviceId]
-    if (!view?.webContents || view.webContents.isDestroyed()) {
-      return { success: false, error: 'view_not_found' }
-    }
-
-    try {
-      view.webContents.forcefullyCrashRenderer()
-      return {
-        success: true,
-        serviceId,
-        activeService: playerController.activeServiceId,
-        isActive: playerController.activeServiceId === serviceId,
+    ipcMain.handle('debug:crash-view', (_event, payload = {}) => {
+      const serviceId = payload?.serviceId
+      if (!isNonEmptyString(serviceId)) {
+        return { success: false, error: 'invalid_serviceId' }
       }
-    } catch (error) {
-      return { success: false, error: error?.message || 'crash_failed' }
-    }
-  })
 
-  ipcMain.handle('debug:validate-load-cancellation', async () => runLoadCancellationValidation())
-  ipcMain.handle('debug:validate-health', async () => runHealthValidation())
-  ipcMain.handle('debug:run-stress', async (_event, payload = {}) => {
-    return runStressValidation(payload)
-  })
-  ipcMain.handle('debug:run-smoke', async () => runSmokeValidation())
+      const view = views[serviceId]
+      if (!view?.webContents || view.webContents.isDestroyed()) {
+        return { success: false, error: 'view_not_found' }
+      }
+
+      try {
+        view.webContents.forcefullyCrashRenderer()
+        return {
+          success: true,
+          serviceId,
+          activeService: playerController.activeServiceId,
+          isActive: playerController.activeServiceId === serviceId,
+        }
+      } catch (error) {
+        return { success: false, error: error?.message || 'crash_failed' }
+      }
+    })
+
+    ipcMain.handle('debug:validate-load-cancellation', async () => runLoadCancellationValidation())
+    ipcMain.handle('debug:validate-health', async () => runHealthValidation())
+    ipcMain.handle('debug:run-stress', async (_event, payload = {}) => {
+      return runStressValidation(payload)
+    })
+    ipcMain.handle('debug:run-smoke', async () => runSmokeValidation())
+  }
 
   ipcMain.on('media:update', (event, data) => {
     if (!mainWindow || mainWindow.isDestroyed()) return
@@ -3909,8 +4125,8 @@ app.whenReady().then(async () => {
   })
 
   // Log de debugeo: verificar persistencia de sesión en tiempo de ejecución
-  if (DEBUG_MODE) {
-    setInterval(() => {
+  if (DEBUG_MODE && !debugSessionCheckTimer) {
+    debugSessionCheckTimer = setInterval(() => {
       try {
         const sess = getGlobalSession()
         if (sess) {
@@ -4042,6 +4258,11 @@ process.on('exit', () => {
   if (networkStatusTimer) {
     clearInterval(networkStatusTimer)
     networkStatusTimer = null
+  }
+
+  if (debugSessionCheckTimer) {
+    clearInterval(debugSessionCheckTimer)
+    debugSessionCheckTimer = null
   }
 })
 

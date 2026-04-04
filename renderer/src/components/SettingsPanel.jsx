@@ -9,7 +9,18 @@ import SettingsRow from './SettingsRow.jsx'
 import ThemeEditor from './ThemeEditor.jsx'
 import { applyTheme } from '../utils/applyTheme'
 
-const THEMES = ['dark', 'oled', 'light', 'nord', 'catppuccin', 'liquid-glass', 'custom']
+const THEMES = ['dark', 'oled', 'light', 'nord', 'catppuccin', 'mono', 'liquid-glass', 'custom']
+
+const THEME_LABELS = {
+  dark: 'Dark',
+  oled: 'OLED',
+  light: 'Light',
+  nord: 'Nord',
+  catppuccin: 'Catppuccin',
+  mono: 'Mono',
+  'liquid-glass': 'Liquid Glass',
+  custom: 'Custom',
+}
 
 export default function SettingsPanel({ isOpen, onClose }) {
   const { error: showError, success: showSuccess, info: showInfo } = useToast()
@@ -618,7 +629,7 @@ export default function SettingsPanel({ isOpen, onClose }) {
                   onClick={() => handleThemeChange(id)}
                 >
                   <span className="theme-btn-swatch" aria-hidden="true" />
-                  <span className="theme-btn-label">{id}</span>
+                  <span className="theme-btn-label">{THEME_LABELS[id] || id}</span>
                 </button>
               ))}
             </div>

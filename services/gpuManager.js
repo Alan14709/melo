@@ -81,6 +81,10 @@ const state = {
     sessionType: process.env.XDG_SESSION_TYPE || 'unknown',
     isWayland: Boolean(process.env.WAYLAND_DISPLAY || process.env.XDG_SESSION_TYPE === 'wayland'),
     isX11: Boolean(process.env.DISPLAY),
+    isXWayland: Boolean(
+      (process.env.WAYLAND_DISPLAY || process.env.XDG_SESSION_TYPE === 'wayland')
+      && process.env.DISPLAY
+    ),
     gpuVendor: 'unknown',
     sandbox: {
       helperPath: null,
@@ -369,12 +373,14 @@ function detectSandboxStatus() {
 function detectEnvironment() {
   const isWayland = Boolean(process.env.WAYLAND_DISPLAY || process.env.XDG_SESSION_TYPE === 'wayland')
   const isX11 = Boolean(process.env.DISPLAY) && !isWayland
+  const isXWayland = Boolean(isWayland && process.env.DISPLAY)
 
   return {
     platform: process.platform,
     sessionType: process.env.XDG_SESSION_TYPE || (isWayland ? 'wayland' : (isX11 ? 'x11' : 'unknown')),
     isWayland,
     isX11,
+    isXWayland,
     gpuVendor: detectGPUVendor(),
     sandbox: detectSandboxStatus(),
   }

@@ -21,7 +21,7 @@ export default function OfflineBanner() {
       }
     }
 
-    window.melo.network.onChange(handleNetworkChange)
+    const unsubscribeNetwork = window.melo.network.onChange(handleNetworkChange)
 
     const handleOnline = () => {
       setOnline(true)
@@ -39,7 +39,7 @@ export default function OfflineBanner() {
       if (hideTimer) clearTimeout(hideTimer)
       window.removeEventListener('online', handleOnline)
       window.removeEventListener('offline', handleOffline)
-      window.melo.removeAllListeners('network:status')
+      if (typeof unsubscribeNetwork === 'function') unsubscribeNetwork()
     }
   }, [])
 
