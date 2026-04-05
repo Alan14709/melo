@@ -121,6 +121,19 @@ export default function SettingsPanel({ isOpen, onClose }) {
       })
   }, [isOpen])
 
+  useEffect(() => {
+    if (!isOpen) return
+
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      onClose?.()
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isOpen, onClose])
+
   const handleExport = () => {
     const payload = JSON.stringify(playHistory, null, 2)
     const blob = new Blob([payload], { type: 'application/json' })
