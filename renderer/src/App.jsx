@@ -14,6 +14,7 @@ import FallbackControls from './components/FallbackControls.jsx'
 import ToastManager from './components/ToastManager.jsx'
 import ArtworkGradient from './components/ArtworkGradient.jsx'
 import { getUISafeMode } from './hooks/useUISafeMode'
+import { logger } from './utils/logger'
 import { SERVICES } from '../../services/registry'
 import { extractPalette } from './utils/colorExtractor'
 import { applyTheme, applyDynamicPalette } from './utils/applyTheme'
@@ -29,6 +30,7 @@ export default function App() {
   const [fallbackStatus, setFallbackStatus] = useState({ phase: 'idle', message: null, mitigated: false })
   const [gpuStatus, setGpuStatus] = useState(null)
   const [immersive, setImmersive] = useState(false)
+  const [isServiceLoading, setIsServiceLoading] = useState(false)
   const shortcutStateRef = useRef({
     commandPaletteOpen: false,
     immersive: false,
@@ -46,6 +48,7 @@ export default function App() {
     setTheme,
     hydrateSettings,
     setAccentColor,
+    activeServiceColor,
   } = usePlayerStore()
   const uiSafe = useMemo(() => getUISafeMode(gpuStatus), [gpuStatus])
 
@@ -73,45 +76,19 @@ export default function App() {
   }, [setActiveService, setView])
 
   const commandActions = useMemo(() => ([
-    {
-      id: 'spotify',
-      label: 'Switch to Spotify',
-      action: () => handleSwitchService(SERVICES.spotify),
-    },
-    {
-      id: 'settings',
-      label: 'Open Settings',
-      action: () => setSettingsOpen(true),
-    },
-    {
-      id: 'theme',
-      label: 'Change Theme',
-      action: () => setSettingsOpen(true),
-    },
+    { id: 'apple',   label: 'Switch to Apple Music',  action: () => handleSwitchService(SERVICES.appleMusic) },
+    { id: 'spotify', label: 'Switch to Spotify',       action: () => handleSwitchService(SERVICES.spotify) },
+    { id: 'youtube', label: 'Switch to YT Music',      action: () => handleSwitchService(SERVICES.youtubeMusic) },
+    { id: 'tidal',   label: 'Switch to Tidal',         action: () => handleSwitchService(SERVICES.tidal) },
+    { id: 'deezer',  label: 'Switch to Deezer',        action: () => handleSwitchService(SERVICES.deezer) },
+    { id: 'play-pause',      label: 'Play / Pause',    action: () => window.melo.playerAction('play') },
+    { id: 'next-track',      label: 'Next Track',      action: () => window.melo.playerAction('next') },
+    { id: 'settings',        label: 'Open Settings',   action: () => setSettingsOpen(true) },
+    { id: 'theme',           label: 'Change Theme',    action: () => setSettingsOpen(true) },
     {
       id: 'immersive-toggle',
       label: immersive ? 'Exit Immersive Mode' : 'Enter Immersive Mode',
       action: () => setImmersive((prev) => !prev),
-    },
-    {
-      id: 'play-pause',
-      label: 'Play / Pause',
-      action: () => window.melo.playerAction('play'),
-    },
-    {
-      id: 'next-track',
-      label: 'Next Track',
-      action: () => window.melo.playerAction('next'),
-    },
-    {
-      id: 'apple',
-      label: 'Switch to Apple Music',
-      action: () => handleSwitchService(SERVICES.appleMusic),
-    },
-    {
-      id: 'youtube',
-      label: 'Switch to YT Music',
-      action: () => handleSwitchService(SERVICES.youtubeMusic),
     },
   ]), [handleSwitchService, immersive, setSettingsOpen])
 
@@ -142,7 +119,9 @@ export default function App() {
           )
           setView('player')
         }
-      } catch (_) {}
+      } catch (err) {
+        logger.warn('Init failed, using defaults', err)
+      }
     }
 
     init()
@@ -244,8 +223,10 @@ export default function App() {
         return
       }
 
+      // Space viene de BrowserViews via IPC; guardar solo si no hay input activo
+      // en el renderer (e.g. settings abierto con foco en un campo).
       if (shortcut === 'space') {
-        window.melo.playerAction('play')
+        if (!isTypingContext()) window.melo.playerAction('play')
       }
     }))
     unsubscribers.push(window.melo.health?.onChange?.((status) => {
@@ -258,6 +239,10 @@ export default function App() {
 
     unsubscribers.push(window.melo.gpuInfo?.onChange?.((status) => {
       if (status && typeof status === 'object') setGpuStatus(status)
+    }))
+
+    unsubscribers.push(window.melo.service?.onLoading?.((data) => {
+      if (data && typeof data.isLoading === 'boolean') setIsServiceLoading(data.isLoading)
     }))
 
     window.melo.health?.getStatus?.().then((status) => {
@@ -320,14 +305,19 @@ export default function App() {
   useEffect(() => {
     const onKeyDown = (event) => {
       if (event.repeat) return
+      if (isTypingContext(event.target)) return
+      if (shortcutStateRef.current.commandPaletteOpen) return
 
-      if (isTypingContext(event.target)) {
+      // Space en renderer principal: play/pause cuando no hay input activo.
+      // Los BrowserViews reenvian Space via IPC; este handler cubre el caso
+      // en que el renderer tiene foco (e.g. Settings abierto sin campo activo).
+      if (event.key === ' ') {
+        event.preventDefault()
+        window.melo.playerAction('play')
         return
       }
 
-      if (shortcutStateRef.current.commandPaletteOpen) return
-
-      const isServiceShortcut = (event.metaKey || event.ctrlKey) && ['1', '2', '3'].includes(event.key)
+      const isServiceShortcut = (event.metaKey || event.ctrlKey) && ['1', '2', '3', '4', '5'].includes(event.key)
       if (!isServiceShortcut) return
 
       const serviceIndex = Number(event.key) - 1
@@ -340,7 +330,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [handleSwitchService, servicesList, setCommandPaletteOpen])
+  }, [handleSwitchService, servicesList])
 
   const handleSelectService = useCallback((service) => {
     setPendingService(service)
@@ -371,6 +361,11 @@ export default function App() {
 
   return (
     <div className={`app-root ${uiSafe.isSafeMode ? 'safe-mode' : ''}`} style={{ position: 'relative', zIndex: 1 }}>
+      <div
+        className={`service-loading-bar ${isServiceLoading ? 'active' : ''}`}
+        style={{ '--loading-bar-color': activeServiceColor || 'var(--accent)' }}
+        aria-hidden="true"
+      />
       <ArtworkGradient opacity={0.85} />
       <ToastManager />
 

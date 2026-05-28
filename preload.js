@@ -354,6 +354,9 @@ contextBridge.exposeInMainWorld('melo', {
     getStatus: () => safeInvoke('network:status'),
     onChange: (cb) => subscribeIpc('network:status', (_e, data) => cb(data)),
   },
+  service: {
+    onLoading: (cb) => subscribeIpc('service:loading', (_e, data) => cb(data)),
+  },
   health: {
     getStatus: () => safeInvoke('health:get-status'),
     onChange: (cb) => subscribeIpc('health:status', (_e, data) => cb(data)),

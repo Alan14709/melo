@@ -4917,3 +4917,42 @@ a:focus-visible {
   }
 }
 
+/* ============================================================
+   SERVICE LOADING BAR
+   Barra de progreso delgada en el borde superior de la app.
+   Completamente CSS-driven; sin JS de animacion.
+   ============================================================ */
+.service-loading-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: var(--z-toast);
+  pointer-events: none;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+
+.service-loading-bar.active {
+  opacity: 1;
+}
+
+.service-loading-bar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -55%;
+  width: 55%;
+  height: 100%;
+  background: var(--loading-bar-color, var(--accent));
+  border-radius: 0 2px 2px 0;
+  animation: loading-bar-sweep 1.3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes loading-bar-sweep {
+  0%   { left: -55%; }
+  100% { left: 145%; }
+}
+

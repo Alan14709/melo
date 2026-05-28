@@ -182,14 +182,12 @@ export default function SettingsPanel({ isOpen, onClose }) {
       logger.debug(`Guardado: ${key}`, { value })
 
       if (!silentSuccess && successMessage) {
-        console.log('Before toast:', successMessage)
         showSuccess(successMessage)
       }
       return true
     } catch (err) {
       logger.error(`Error al guardar ${key}`, err)
       const msg = errorMessage || `No pude guardar ${key}`
-      console.log('Before toast:', msg)
       showError(msg)
       return false
     }
@@ -336,19 +334,13 @@ export default function SettingsPanel({ isOpen, onClose }) {
       setDiscordConnected(Boolean(ok))
 
       if (ok) {
-        const msg = enabled ? 'Discord conectado' : 'Discord desconectado'
-        console.log('Before toast:', msg)
-        showSuccess(msg)
+        showSuccess(enabled ? 'Discord conectado' : 'Discord desconectado')
       } else {
-        const msg = enabled ? 'No pude conectar Discord' : 'No pude desconectar Discord'
-        console.log('Before toast:', msg)
-        showError(msg)
+        showError(enabled ? 'No pude conectar Discord' : 'No pude desconectar Discord')
       }
     } catch (err) {
       logger.error('Discord toggle failed', err)
-      const msg = 'Error al actualizar Discord'
-      console.log('Before toast:', msg)
-      showError(msg)
+      showError('Error al actualizar Discord')
     }
   }
 
@@ -361,19 +353,13 @@ export default function SettingsPanel({ isOpen, onClose }) {
       setDiscordConnected(Boolean(ok))
 
       if (ok) {
-        const msg = 'Discord conectado correctamente'
-        console.log('Before toast:', msg)
-        showSuccess(msg)
+        showSuccess('Discord conectado correctamente')
       } else {
-        const msg = 'No pude conectar Discord'
-        console.log('Before toast:', msg)
-        showError(msg)
+        showError('No pude conectar Discord')
       }
     } catch (err) {
       logger.error('Discord connect failed', err)
-      const msg = 'Error al conectar Discord'
-      console.log('Before toast:', msg)
-      showError(msg)
+      showError('Error al conectar Discord')
     }
   }
 
@@ -403,14 +389,10 @@ export default function SettingsPanel({ isOpen, onClose }) {
       const token = await window.melo.lastfmAuth()
       setLfmToken(token)
       setLfmStep(3)
-      const msg = 'Continuar autorización en Last.fm'
-      console.log('Before toast:', msg)
-      showSuccess(msg)
+      showSuccess('Continuar autorización en Last.fm')
     } catch (err) {
       logger.error('Last.fm auth init failed', err)
-      const msg = 'Error iniciando autorización de Last.fm'
-      console.log('Before toast:', msg)
-      showError(msg)
+      showError('Error iniciando autorización de Last.fm')
     }
   }
 
@@ -430,21 +412,15 @@ export default function SettingsPanel({ isOpen, onClose }) {
         await persist('lastfmEnabled', true)
         setLastfm(true)
         setLfmStep(5)
-        const msg = 'Last.fm conectado correctamente'
-        console.log('Before toast:', msg)
-        showSuccess(msg)
+        showSuccess('Last.fm conectado correctamente')
         return
       }
       setLfmStep(3)
-      const msg = 'No se pudo confirmar Last.fm todavía'
-      console.log('Before toast:', msg)
-      showError(msg)
+      showError('No se pudo confirmar Last.fm todavía')
     } catch (err) {
       logger.error('Last.fm confirm failed', err)
       setLfmStep(3)
-      const msg = 'Error al confirmar sesión de Last.fm'
-      console.log('Before toast:', msg)
-      showError(msg)
+      showError('Error al confirmar sesión de Last.fm')
     }
   }
 
@@ -472,7 +448,7 @@ export default function SettingsPanel({ isOpen, onClose }) {
 
         <div className="settings-content">
           <section className="settings-section-card">
-            <h3 className="settings-section-title">SERVICIOS <span className="badge-version">v0.2</span></h3>
+            <h3 className="settings-section-title">SERVICIOS</h3>
             <button className="settings-btn-secondary" onClick={handleSwitchToPicker}>
               Cambiar servicio
             </button>
@@ -496,7 +472,7 @@ export default function SettingsPanel({ isOpen, onClose }) {
           </section>
 
           <section className="settings-section-card">
-            <h3 className="settings-section-title">DISCORD <span className="badge-version">v0.3</span></h3>
+            <h3 className="settings-section-title">DISCORD</h3>
             <SettingsRow label="Rich Presence" type="toggle" value={discordEnabled} onChange={handleDiscordToggle} />
             {discordEnabled && (
               <>
@@ -524,7 +500,7 @@ export default function SettingsPanel({ isOpen, onClose }) {
           </section>
 
           <section className="settings-section-card">
-            <h3 className="settings-section-title">LAST.FM <span className="badge-version">v0.3</span></h3>
+            <h3 className="settings-section-title">LAST.FM</h3>
             <SettingsRow label="Scrobbling" type="toggle" value={lastfmEnabled} onChange={handleLfmToggle} />
             {lastfmEnabled && (
               <div className="lfm-flow">
@@ -579,7 +555,7 @@ export default function SettingsPanel({ isOpen, onClose }) {
           </section>
 
           <section className="settings-section-card">
-            <h3 className="settings-section-title">NOTIFICACIONES <span className="badge-version">v0.3</span></h3>
+            <h3 className="settings-section-title">NOTIFICACIONES</h3>
             <SettingsRow label="Notificaciones de cancion" type="toggle" value={notificationsEnabled} onChange={handleNotificationsToggle} />
           </section>
 
@@ -705,20 +681,26 @@ export default function SettingsPanel({ isOpen, onClose }) {
 
           <section className="settings-section-card">
             <h3 className="settings-section-title">ATAJOS</h3>
-            <SettingsRow label="Cmd+K Command Palette" badge="v0.4" type="shortcut" value="Cmd/Ctrl+K" />
-            <SettingsRow label="MediaPlayPause" type="shortcut" value="MediaPlayPause" />
-            <SettingsRow label="MediaNext / MediaPrev" type="shortcut" value="MediaNextTrack / MediaPreviousTrack" />
+            <SettingsRow label="Apple Music"    type="shortcut" value="Ctrl+1" />
+            <SettingsRow label="Spotify"        type="shortcut" value="Ctrl+2" />
+            <SettingsRow label="YouTube Music"  type="shortcut" value="Ctrl+3" />
+            <SettingsRow label="Tidal"          type="shortcut" value="Ctrl+4" />
+            <SettingsRow label="Deezer"         type="shortcut" value="Ctrl+5" />
+            <SettingsRow label="Command Palette" type="shortcut" value="Ctrl+K" />
+            <SettingsRow label="Play / Pause"   type="shortcut" value="Espacio" />
+            <SettingsRow label="Cerrar overlay" type="shortcut" value="Escape" />
+            <SettingsRow label="Teclas multimedia" type="shortcut" value="MediaPlay / Next / Prev" />
           </section>
 
           <section className="settings-section-card">
-            <h3 className="settings-section-title">ESTADISTICAS <span className="badge-version">v0.5</span></h3>
+            <h3 className="settings-section-title">ESTADÍSTICAS</h3>
             <SettingsRow label="Guardar historial" type="toggle" value={statsEnabled} onChange={handleStatsToggle} />
             <SettingsRow label="Exportar datos" type="button" onChange={handleExport} />
             <SettingsRow label="Borrar estadisticas" type="button" buttonText="Borrar" onChange={handleClearStats} />
           </section>
 
           <section className="settings-section-card">
-            <h3 className="settings-section-title">ACTUALIZACIONES <span className="badge-version">v1.0</span></h3>
+            <h3 className="settings-section-title">ACTUALIZACIONES</h3>
             <SettingsRow label="Version" type="text" value={`v${version}`} />
             <SettingsRow label="Auto-update" type="toggle" value={autoUpdateEnabled} onChange={handleAutoUpdateToggle} />
           </section>

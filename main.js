@@ -336,9 +336,16 @@ function emitForwardedShortcut(shortcut, source = 'unknown') {
 function attachShortcutForwarding(webContents, source) {
   if (!webContents || webContents.isDestroyed()) return
 
+  const isMainRenderer = source === 'renderer'
+
   webContents.on('before-input-event', (event, input) => {
     const shortcut = resolveShortcutFromInput(input)
     if (!shortcut) return
+
+    // En el renderer principal, Space se gestiona via keydown nativo en el renderer
+    // con chequeo de contexto de escritura; no interceptarlo aqui para que los
+    // inputs, textareas y campos editables reciban el caracter normalmente.
+    if (isMainRenderer && shortcut === 'space') return
 
     // Evitar que BrowserView consuma los atajos cuando tiene foco.
     event.preventDefault()
@@ -1569,6 +1576,7 @@ function setupViewLifecycleHandlers(view, serviceId, url) {
   view.webContents.removeAllListeners('did-fail-load')
   view.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
     logger.error('BrowserView', 'load_failed', { serviceId, errorCode, errorDescription })
+    safeSendToMainWindow('service:loading', { isLoading: false, serviceId })
 
     // ERR_ABORTED (-3) es esperable al cancelar cargas por switch rapido.
     if (Number(errorCode) === -3) {
@@ -2835,10 +2843,12 @@ async function createServiceView(serviceId, url) {
   view.webContents.removeAllListeners('did-start-loading')
   view.webContents.on('did-start-loading', () => {
     playerController.setState(PLAYER_STATE.LOADING, `did-start-loading ${serviceId}`)
+    safeSendToMainWindow('service:loading', { isLoading: true, serviceId })
   })
 
   view.webContents.on('did-finish-load', () => {
     playerController.setState(PLAYER_STATE.READY, `did-finish-load ${serviceId}`)
+    safeSendToMainWindow('service:loading', { isLoading: false, serviceId })
     applyVolumeToWebContents(view.webContents, currentVolumeLevel).catch(() => {})
 
     if (serviceId === 'appleMusic') {
@@ -3072,6 +3082,7 @@ async function switchToService(serviceId, url, serviceData) {
     const previousServiceId = playerController.activeServiceId
     playerController.activeServiceId = serviceId
     playerController.setState(PLAYER_STATE.LOADING, `switch ${serviceId}`)
+    safeSendToMainWindow('service:loading', { isLoading: true, serviceId })
 
     if (activeView) {
       try {
