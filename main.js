@@ -319,7 +319,8 @@ function resolveShortcutFromInput(input) {
 
   if (key === 'escape') return 'escape'
   if ((input?.control || input?.meta) && key === 'k') return 'cmdk'
-  if (key === ' ' || key === 'space') return 'space'
+  // Space ya no se intercepta — los servicios (Apple Music, Spotify…) lo reciben
+  // de forma nativa para scroll, typing, etc. Play/pause usa 'k' en el renderer.
 
   return null
 }
@@ -923,6 +924,7 @@ let isSwitchingService = false
 let currentSwitchTarget = null
 let lastSwitchRequest = { serviceId: null, url: null, at: 0 }
 let switchLockTimer = null
+let boundsUpdateTimer = null
 const loadAbortControllers = new Map()
 const loadStateByService = new Map()
 const crashedServices = new Set()
@@ -1228,19 +1230,40 @@ function executeInWebContents(webContents, script, {
 }
 
 function getContentBounds() {
-  if (!mainWindow) return { x: 0, y: 45, width: 1200, height: 633 }
+  if (!mainWindow || mainWindow.isDestroyed()) return { x: 0, y: 45, width: 1200, height: 633 }
+
   const b = mainWindow.getContentBounds()
   const immersiveEnabled = store.get('immersiveEnabled', SETTINGS_DEFAULTS.immersiveEnabled) === true
+
   const SIDEBAR_WIDTH = 220
-  const TOP_HEIGHT = 45
-  const BOTTOM_HEIGHT = 72
+  const TOP_HEIGHT    = 46   // must match CSS --topbar-height
+  const BOTTOM_HEIGHT = 88   // must match CSS --playerbar-height
 
-  let x = immersiveEnabled ? 0 : SIDEBAR_WIDTH
-  let y = TOP_HEIGHT
-  let width = Math.max(360, b.width - x)
-  let height = Math.max(200, b.height - TOP_HEIGHT - BOTTOM_HEIGHT)
+  const x = immersiveEnabled ? 0 : SIDEBAR_WIDTH
+  const y = TOP_HEIGHT
 
-  return { x, y, width, height }
+  // Integer-align all values to prevent sub-pixel drift on fractional-DPI displays
+  const width  = Math.max(360, Math.floor(b.width  - x))
+  const height = Math.max(200, Math.floor(b.height - TOP_HEIGHT - BOTTOM_HEIGHT))
+
+  return { x: Math.floor(x), y: Math.floor(y), width, height }
+}
+
+// Centralized, debounced bounds scheduler.
+// All resize/move/immersive/settings triggers funnel through here.
+function scheduleBoundsUpdate(delayMs = 16) {
+  if (boundsUpdateTimer !== null) {
+    clearTimeout(boundsUpdateTimer)
+    boundsUpdateTimer = null
+  }
+  if (delayMs <= 0) {
+    applyViewBounds()
+    return
+  }
+  boundsUpdateTimer = setTimeout(() => {
+    boundsUpdateTimer = null
+    applyViewBounds()
+  }, delayMs)
 }
 
 function logProcessMetrics(tag = 'metrics') {
@@ -1398,7 +1421,9 @@ function armSwitchLockTimeout(timeoutMs = 8000) {
         timeoutMs,
         target: currentSwitchTarget,
       })
+      const timedOutServiceId = currentSwitchTarget
       unlockSwitchLock('timeout')
+      safeSendToMainWindow('service:loading', { isLoading: false, serviceId: timedOutServiceId })
     }
   }, timeoutMs)
 }
@@ -1615,9 +1640,15 @@ function setupViewLifecycleHandlers(view, serviceId, url) {
 
   view.webContents.removeAllListeners('did-finish-load')
   view.webContents.on('did-finish-load', () => {
+    safeSendToMainWindow('service:loading', { isLoading: false, serviceId })
     if (currentSwitchTarget === serviceId) {
       unlockSwitchLock('did-finish-load')
     }
+  })
+
+  view.webContents.removeAllListeners('did-stop-loading')
+  view.webContents.on('did-stop-loading', () => {
+    safeSendToMainWindow('service:loading', { isLoading: false, serviceId })
   })
 }
 
@@ -2222,8 +2253,12 @@ function applyViewBounds() {
   if (!activeView || !activeView.webContents) return
   if (activeView.webContents.isDestroyed()) return
 
-  safeSetBounds(activeView, getContentBounds())
-  activeView.setAutoResize({ width: true, height: true })
+  const bounds = getContentBounds()
+
+  // Guard: skip if computed area is nonsensical (window minimized / hidden)
+  if (bounds.width < 100 || bounds.height < 100) return
+
+  safeSetBounds(activeView, bounds)
 }
 
 function createMainWindow() {
@@ -2362,7 +2397,15 @@ function createMainWindow() {
     logger.error('MainWindow', 'render_process_gone', diagnostics)
   })
 
-  mainWindow.on('resize', applyViewBounds)
+  // Debounce rapid resize events — fires ~60x/s during drag on Linux
+  mainWindow.on('resize', () => scheduleBoundsUpdate(12))
+
+  // Fractional-DPI desync: window move can shift pixel grid on Linux
+  mainWindow.on('moved', () => scheduleBoundsUpdate(24))
+
+  mainWindow.on('enter-full-screen', () => scheduleBoundsUpdate(80))
+  mainWindow.on('leave-full-screen', () => scheduleBoundsUpdate(80))
+  mainWindow.on('restore', () => scheduleBoundsUpdate(40))
 
   mainWindow.on('blur', () => {
     if (activeView?.webContents && !activeView.webContents.isDestroyed()) {
@@ -3128,6 +3171,10 @@ async function switchToService(serviceId, url, serviceData) {
     activeView = nextView
     viewMetrics.switches += 1
 
+    // Disable Electron's built-in auto-resize; we control all bounds manually
+    // via scheduleBoundsUpdate to avoid double-application and drift.
+    try { nextView.setAutoResize({ width: false, height: false, horizontal: false, vertical: false }) } catch (_) {}
+
     if (!nextView.webContents.isDestroyed()) {
       nextView.webContents.setAudioMuted(false)
     }
@@ -3141,13 +3188,14 @@ async function switchToService(serviceId, url, serviceData) {
         }
       } catch (_) {}
     })
-    setTimeout(applyViewBounds, 50)
+    scheduleBoundsUpdate(50)
 
     safeSendToMainWindow('service:active', {
       serviceId,
       color: serviceData?.color || '#fc3c44',
       name: serviceData?.name || serviceId,
     })
+    safeSendToMainWindow('service:loading', { isLoading: false, serviceId })
 
     const latencyMs = Date.now() - switchStartedAt
     performanceMetrics.switchLatencySamples += 1
@@ -3255,7 +3303,7 @@ function registerIpcHandlers() {
       if (!currentViews.includes(activeView)) {
         mainWindow.addBrowserView(activeView)
       }
-      applyViewBounds()
+      scheduleBoundsUpdate(0)
     }
   })
 
@@ -3773,7 +3821,7 @@ function registerIpcHandlers() {
             store.set('overlayPosition', pos)
           }
         }
-        setTimeout(() => applyViewBounds(), 50)
+        scheduleBoundsUpdate(50)
       } catch (error) {
         logger.warn('Immersive', 'apply_failed', {
           message: error?.message || 'unknown_error',

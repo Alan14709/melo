@@ -49,6 +49,8 @@ export default function App() {
     hydrateSettings,
     setAccentColor,
     activeServiceColor,
+    focusMode,
+    setFocusMode,
   } = usePlayerStore()
   const uiSafe = useMemo(() => getUISafeMode(gpuStatus), [gpuStatus])
 
@@ -76,21 +78,29 @@ export default function App() {
   }, [setActiveService, setView])
 
   const commandActions = useMemo(() => ([
-    { id: 'apple',   label: 'Switch to Apple Music',  action: () => handleSwitchService(SERVICES.appleMusic) },
-    { id: 'spotify', label: 'Switch to Spotify',       action: () => handleSwitchService(SERVICES.spotify) },
-    { id: 'youtube', label: 'Switch to YT Music',      action: () => handleSwitchService(SERVICES.youtubeMusic) },
-    { id: 'tidal',   label: 'Switch to Tidal',         action: () => handleSwitchService(SERVICES.tidal) },
-    { id: 'deezer',  label: 'Switch to Deezer',        action: () => handleSwitchService(SERVICES.deezer) },
-    { id: 'play-pause',      label: 'Play / Pause',    action: () => window.melo.playerAction('play') },
-    { id: 'next-track',      label: 'Next Track',      action: () => window.melo.playerAction('next') },
-    { id: 'settings',        label: 'Open Settings',   action: () => setSettingsOpen(true) },
-    { id: 'theme',           label: 'Change Theme',    action: () => setSettingsOpen(true) },
+    { id: 'apple',   label: 'Apple Music',  group: 'services', hint: '⌘1', action: () => handleSwitchService(SERVICES.appleMusic) },
+    { id: 'spotify', label: 'Spotify',      group: 'services', hint: '⌘2', action: () => handleSwitchService(SERVICES.spotify) },
+    { id: 'youtube', label: 'YouTube Music', group: 'services', hint: '⌘3', action: () => handleSwitchService(SERVICES.youtubeMusic) },
+    { id: 'tidal',   label: 'Tidal',        group: 'services', hint: '⌘4', action: () => handleSwitchService(SERVICES.tidal) },
+    { id: 'deezer',  label: 'Deezer',       group: 'services', hint: '⌘5', action: () => handleSwitchService(SERVICES.deezer) },
+    { id: 'play-pause', label: 'Play / Pause', group: 'playback', hint: 'K', action: () => window.melo.playerAction('play') },
+    { id: 'next-track', label: 'Siguiente canción', group: 'playback', action: () => window.melo.playerAction('next') },
+    { id: 'settings', label: 'Ajustes', group: 'navigation', action: () => setSettingsOpen(true) },
+    { id: 'theme',    label: 'Cambiar tema', group: 'navigation', action: () => setSettingsOpen(true) },
     {
       id: 'immersive-toggle',
       label: immersive ? 'Exit Immersive Mode' : 'Enter Immersive Mode',
+      group: 'ui',
       action: () => setImmersive((prev) => !prev),
     },
-  ]), [handleSwitchService, immersive, setSettingsOpen])
+    {
+      id: 'focus-toggle',
+      label: focusMode ? 'Salir de Focus Mode' : 'Activar Focus Mode',
+      group: 'ui',
+      action: () => setFocusMode(!focusMode),
+    },
+    { id: 'stats',    label: 'Ver Estadísticas',   group: 'navigation', action: () => setView('stats') },
+  ]), [handleSwitchService, immersive, focusMode, setFocusMode, setSettingsOpen, setView])
 
   // Cargar preferencias persistidas desde el proceso principal.
   useEffect(() => {
@@ -223,11 +233,8 @@ export default function App() {
         return
       }
 
-      // Space viene de BrowserViews via IPC; guardar solo si no hay input activo
-      // en el renderer (e.g. settings abierto con foco en un campo).
-      if (shortcut === 'space') {
-        if (!isTypingContext()) window.melo.playerAction('play')
-      }
+      // 'space' ya no se reenvía desde BrowserViews (los servicios lo usan
+      // nativamente). Play/pause ahora es 'k' desde el keydown del renderer.
     }))
     unsubscribers.push(window.melo.health?.onChange?.((status) => {
       if (status && typeof status === 'object') setHealthStatus(status)
@@ -308,10 +315,11 @@ export default function App() {
       if (isTypingContext(event.target)) return
       if (shortcutStateRef.current.commandPaletteOpen) return
 
-      // Space en renderer principal: play/pause cuando no hay input activo.
-      // Los BrowserViews reenvian Space via IPC; este handler cubre el caso
-      // en que el renderer tiene foco (e.g. Settings abierto sin campo activo).
-      if (event.key === ' ') {
+      // K = play/pause (estilo YouTube/VLC). Space ya no se usa aquí porque
+      // los BrowserViews lo necesitan para scroll/typing dentro de los servicios.
+      if (event.key.toLowerCase() === 'k') {
+        const { settingsOpen: so, currentView: cv } = usePlayerStore.getState()
+        if (so || cv !== 'player') return
         event.preventDefault()
         window.melo.playerAction('play')
         return
@@ -360,7 +368,7 @@ export default function App() {
   ), [fallbackStatus, healthStatus])
 
   return (
-    <div className={`app-root ${uiSafe.isSafeMode ? 'safe-mode' : ''}`} style={{ position: 'relative', zIndex: 1 }}>
+    <div className={`app-root ${uiSafe.isSafeMode ? 'safe-mode' : ''} ${focusMode ? 'focus-mode' : ''}`} style={{ position: 'relative', zIndex: 1 }}>
       <div
         className={`service-loading-bar ${isServiceLoading ? 'active' : ''}`}
         style={{ '--loading-bar-color': activeServiceColor || 'var(--accent)' }}

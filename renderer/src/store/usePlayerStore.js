@@ -53,6 +53,9 @@ export const usePlayerStore = create((set) => ({
   autoUpdateEnabled: false,
   playHistory: [],
 
+  // Focus Mode
+  focusMode: false,
+
   // UI State System (Fase 1 - UX Feedback)
   // Estructura: { [feature]: 'idle' | 'loading' | 'success' | 'error' }
   uiState: {
@@ -105,6 +108,7 @@ export const usePlayerStore = create((set) => ({
   setStats: (v) => set({ statsEnabled: v }),
   setAutoUpdate: (v) => set({ autoUpdateEnabled: v }),
   clearPlayHistory: () => set({ playHistory: [] }),
+  setFocusMode: (v) => set({ focusMode: v }),
 
   hydrateSettings: (settings) => set((s) => ({
     ...s,

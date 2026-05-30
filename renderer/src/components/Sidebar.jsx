@@ -1,5 +1,5 @@
 import React from 'react'
-import { Music2, SlidersHorizontal, BarChart2, PictureInPicture } from 'lucide-react'
+import { Music2, BarChart2, PictureInPicture, Focus } from 'lucide-react'
 import { SERVICES } from '../../../services/registry'
 import { usePlayerStore } from '../store/usePlayerStore'
 
@@ -7,8 +7,10 @@ export default function Sidebar() {
   const activeServiceId = usePlayerStore((s) => s.activeServiceId)
   const currentView = usePlayerStore((s) => s.currentView)
   const isPlaying = usePlayerStore((s) => s.isPlaying)
+  const focusMode = usePlayerStore((s) => s.focusMode)
   const setActiveService = usePlayerStore((s) => s.setActiveService)
   const setView = usePlayerStore((s) => s.setView)
+  const setFocusMode = usePlayerStore((s) => s.setFocusMode)
 
   const list = Object.values(SERVICES)
 
@@ -17,7 +19,6 @@ export default function Sidebar() {
       if (currentView === 'stats') setView('player')
       return
     }
-
     window.melo.switchService(service.id, service.url, service)
     setActiveService(service.id, service.color, service.name)
     setView('player')
@@ -25,49 +26,64 @@ export default function Sidebar() {
 
   return (
     <aside className="sidebar">
-      <section className="sidebar-section sidebar-services-block">
-        <h3><Music2 size={14} /> Servicios</h3>
+      <div className="sidebar-section">
+        <p className="sidebar-section-label">
+          <Music2 size={10} style={{ display: 'inline', marginRight: 4 }} />
+          Servicios
+        </p>
         <div className="sidebar-list">
           {list.map((service, index) => (
             <button
               key={service.id}
-              className={`service-item sidebar-service-item sidebar-item-enter ${activeServiceId === service.id ? 'active' : ''}`}
+              className={`sidebar-service-item sidebar-item-enter ${activeServiceId === service.id ? 'active' : ''}`}
               style={{ '--service-color': service.color, animationDelay: `${index * 40}ms` }}
               onClick={() => handleServiceClick(service)}
               title={service.name}
             >
-              <span className={`service-dot ${isPlaying && activeServiceId === service.id ? 'playing' : ''}`} />
-              <span>{service.name}</span>
+              <span
+                className={`service-dot ${isPlaying && activeServiceId === service.id ? 'playing' : ''}`}
+              />
+              <span className="sidebar-item-label">{service.name}</span>
+              {activeServiceId === service.id && isPlaying && (
+                <span className="sidebar-now-playing-pip" />
+              )}
             </button>
           ))}
         </div>
-      </section>
+      </div>
 
-      <section className="sidebar-section sidebar-settings-block">
-        <h3><SlidersHorizontal size={14} /> Ajustes</h3>
-      </section>
+      <div className="sidebar-divider" />
 
-      <div className="sidebar-separator" />
-
-      <div className="sidebar-section sidebar-melo-block">
+      <div className="sidebar-section">
         <p className="sidebar-section-label">Melo</p>
-        <button
-          className={`service-item sidebar-service-item sidebar-melo-item sidebar-item-enter ${currentView === 'stats' ? 'active' : ''}`}
-          style={{ animationDelay: `${list.length * 40}ms` }}
-          onClick={() => setView('stats')}
-        >
-          <BarChart2 size={16} />
-          <span>Estadisticas</span>
-          <span className="version-badge">v0.5</span>
-        </button>
-        <button
-          className="service-item sidebar-service-item sidebar-melo-item sidebar-item-enter"
-          style={{ animationDelay: `${(list.length + 1) * 40}ms` }}
-          onClick={() => window.melo.miniToggle()}
-        >
-          <PictureInPicture size={16} />
-          <span>Mini Player</span>
-        </button>
+        <div className="sidebar-list">
+          <button
+            className={`sidebar-melo-item sidebar-item-enter ${currentView === 'stats' ? 'active' : ''}`}
+            style={{ animationDelay: `${list.length * 40}ms` }}
+            onClick={() => setView('stats')}
+          >
+            <BarChart2 size={14} className="sidebar-item-icon" />
+            <span className="sidebar-item-label">Estadísticas</span>
+          </button>
+          <button
+            className="sidebar-melo-item sidebar-item-enter"
+            style={{ animationDelay: `${(list.length + 1) * 40}ms` }}
+            onClick={() => window.melo.miniToggle()}
+          >
+            <PictureInPicture size={14} className="sidebar-item-icon" />
+            <span className="sidebar-item-label">Mini Player</span>
+          </button>
+          <button
+            className={`sidebar-melo-item sidebar-item-enter ${focusMode ? 'active focus-active' : ''}`}
+            style={{ animationDelay: `${(list.length + 2) * 40}ms` }}
+            onClick={() => setFocusMode(!focusMode)}
+            title={focusMode ? 'Salir de Focus Mode' : 'Activar Focus Mode'}
+          >
+            <Focus size={14} className="sidebar-item-icon" />
+            <span className="sidebar-item-label">Focus</span>
+            {focusMode && <span className="sidebar-focus-badge">ON</span>}
+          </button>
+        </div>
       </div>
     </aside>
   )

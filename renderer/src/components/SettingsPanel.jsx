@@ -22,7 +22,17 @@ const THEME_LABELS = {
   custom: 'Custom',
 }
 
+const SETTINGS_TABS = [
+  { id: 'servicios',      label: 'Servicios' },
+  { id: 'apariencia',     label: 'Apariencia' },
+  { id: 'sistema',        label: 'Sistema' },
+  { id: 'integraciones',  label: 'Integraciones' },
+  { id: 'atajos',         label: 'Atajos' },
+  { id: 'datos',          label: 'Datos' },
+]
+
 export default function SettingsPanel({ isOpen, onClose }) {
+  const [activeTab, setActiveTab] = React.useState('servicios')
   const { error: showError, success: showSuccess, info: showInfo } = useToast()
   const {
     notificationsEnabled,
@@ -446,7 +456,20 @@ export default function SettingsPanel({ isOpen, onClose }) {
           <button onClick={onClose}><X size={18} /></button>
         </header>
 
+        <nav className="settings-tabs">
+          {SETTINGS_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              className={`settings-tab ${activeTab === tab.id ? 'active' : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+
         <div className="settings-content">
+          {activeTab === 'servicios' && (
           <section className="settings-section-card">
             <h3 className="settings-section-title">SERVICIOS</h3>
             <button className="settings-btn-secondary" onClick={handleSwitchToPicker}>
@@ -470,7 +493,27 @@ export default function SettingsPanel({ isOpen, onClose }) {
               )
             })}
           </section>
+          )}
 
+          {activeTab === 'servicios' && (
+          <section className="settings-section-card">
+            <h3 className="settings-section-title">SERVICIOS CONECTADOS</h3>
+            {Object.values(SERVICES).map((service) => {
+              const isConnected = connectedServices.includes(service.id)
+              return (
+                <SettingsRow
+                  key={service.id}
+                  label={service.name}
+                  type="text"
+                  value={isConnected ? 'conectado' : 'desconectado'}
+                />
+              )
+            })}
+          </section>
+          )}
+
+          {activeTab === 'integraciones' && (
+          <>
           <section className="settings-section-card">
             <h3 className="settings-section-title">DISCORD</h3>
             <SettingsRow label="Rich Presence" type="toggle" value={discordEnabled} onChange={handleDiscordToggle} />
@@ -535,7 +578,6 @@ export default function SettingsPanel({ isOpen, onClose }) {
                     />
                   </>
                 )}
-
                 {lfmStep === 3 && (
                   <>
                     <p className="lfm-help">Autoriza Melo en Last.fm y vuelve aqui.</p>
@@ -547,7 +589,6 @@ export default function SettingsPanel({ isOpen, onClose }) {
                     />
                   </>
                 )}
-
                 {lfmStep === 4 && <p className="lfm-help">Obteniendo sesion...</p>}
                 {lfmStep === 5 && <p className="lfm-help ok">✓ Last.fm conectado como @usuario</p>}
               </div>
@@ -558,55 +599,11 @@ export default function SettingsPanel({ isOpen, onClose }) {
             <h3 className="settings-section-title">NOTIFICACIONES</h3>
             <SettingsRow label="Notificaciones de cancion" type="toggle" value={notificationsEnabled} onChange={handleNotificationsToggle} />
           </section>
+          </>
+          )}
 
-          <section className="settings-section-card">
-            <h3 className="settings-section-title">SISTEMA</h3>
-            <SettingsRow
-              label="Atajos multimedia (teclas de reproduccion)"
-              type="toggle"
-              value={mediaKeysEnabled}
-              onChange={handleMediaKeysToggle}
-            />
-            <SettingsRow
-              label="Habilitar bandeja (tray)"
-              type="toggle"
-              value={trayEnabled}
-              onChange={handleTrayToggle}
-            />
-
-            <div className={`settings-row ${!trayEnabled ? 'disabled' : ''}`}>
-              <div className="settings-text">
-                <p className="label">Al cerrar la ventana</p>
-                <p className="sublabel">Si eliges 'Ir a bandeja', Melo seguira ejecutandose en segundo plano.</p>
-              </div>
-              <div className="settings-control">
-                <select
-                  className="settings-select"
-                  value={trayEnabled ? closeBehavior : 'quit'}
-                  onChange={(e) => handleCloseBehaviorChange(e.target.value)}
-                  disabled={!trayEnabled}
-                >
-                  <option value="tray">Ir a bandeja</option>
-                  <option value="quit">Salir</option>
-                </select>
-              </div>
-            </div>
-
-            <SettingsRow
-              label="Iniciar con el sistema"
-              type="toggle"
-              value={autostartEnabled}
-              onChange={handleAutostartToggle}
-            />
-            <SettingsRow
-              label="Iniciar minimizado"
-              type="toggle"
-              value={startMinimized}
-              onChange={handleStartMinimizedToggle}
-              disabled={!autostartEnabled}
-            />
-          </section>
-
+          {activeTab === 'apariencia' && (
+          <>
           <section className="settings-section-card">
             <h3 className="settings-section-title">APARIENCIA</h3>
             <SettingsRow label="Tema" type="text" value={theme.toUpperCase()} />
@@ -678,47 +675,94 @@ export default function SettingsPanel({ isOpen, onClose }) {
               </div>
             </div>
           </section>
+          </>
+          )}
 
+          {activeTab === 'sistema' && (
           <section className="settings-section-card">
-            <h3 className="settings-section-title">ATAJOS</h3>
-            <SettingsRow label="Apple Music"    type="shortcut" value="Ctrl+1" />
-            <SettingsRow label="Spotify"        type="shortcut" value="Ctrl+2" />
-            <SettingsRow label="YouTube Music"  type="shortcut" value="Ctrl+3" />
-            <SettingsRow label="Tidal"          type="shortcut" value="Ctrl+4" />
-            <SettingsRow label="Deezer"         type="shortcut" value="Ctrl+5" />
-            <SettingsRow label="Command Palette" type="shortcut" value="Ctrl+K" />
-            <SettingsRow label="Play / Pause"   type="shortcut" value="Espacio" />
-            <SettingsRow label="Cerrar overlay" type="shortcut" value="Escape" />
-            <SettingsRow label="Teclas multimedia" type="shortcut" value="MediaPlay / Next / Prev" />
+            <h3 className="settings-section-title">SISTEMA</h3>
+            <SettingsRow
+              label="Atajos multimedia (teclas de reproduccion)"
+              type="toggle"
+              value={mediaKeysEnabled}
+              onChange={handleMediaKeysToggle}
+            />
+            <SettingsRow
+              label="Habilitar bandeja (tray)"
+              type="toggle"
+              value={trayEnabled}
+              onChange={handleTrayToggle}
+            />
+            <div className={`settings-row ${!trayEnabled ? 'disabled' : ''}`}>
+              <div className="settings-text">
+                <p className="label">Al cerrar la ventana</p>
+                <p className="sublabel">Si eliges 'Ir a bandeja', Melo seguira ejecutandose en segundo plano.</p>
+              </div>
+              <div className="settings-control">
+                <select
+                  className="settings-select"
+                  value={trayEnabled ? closeBehavior : 'quit'}
+                  onChange={(e) => handleCloseBehaviorChange(e.target.value)}
+                  disabled={!trayEnabled}
+                >
+                  <option value="tray">Ir a bandeja</option>
+                  <option value="quit">Salir</option>
+                </select>
+              </div>
+            </div>
+            <SettingsRow
+              label="Iniciar con el sistema"
+              type="toggle"
+              value={autostartEnabled}
+              onChange={handleAutostartToggle}
+            />
+            <SettingsRow
+              label="Iniciar minimizado"
+              type="toggle"
+              value={startMinimized}
+              onChange={handleStartMinimizedToggle}
+              disabled={!autostartEnabled}
+            />
           </section>
+          )}
 
-          <section className="settings-section-card">
-            <h3 className="settings-section-title">ESTADÍSTICAS</h3>
-            <SettingsRow label="Guardar historial" type="toggle" value={statsEnabled} onChange={handleStatsToggle} />
-            <SettingsRow label="Exportar datos" type="button" onChange={handleExport} />
-            <SettingsRow label="Borrar estadisticas" type="button" buttonText="Borrar" onChange={handleClearStats} />
-          </section>
-
+          {activeTab === 'sistema' && (
           <section className="settings-section-card">
             <h3 className="settings-section-title">ACTUALIZACIONES</h3>
             <SettingsRow label="Version" type="text" value={`v${version}`} />
             <SettingsRow label="Auto-update" type="toggle" value={autoUpdateEnabled} onChange={handleAutoUpdateToggle} />
           </section>
+          )}
 
+          {activeTab === 'atajos' && (
           <section className="settings-section-card">
-            <h3 className="settings-section-title">SERVICIOS CONECTADOS</h3>
-            {Object.values(SERVICES).map((service) => {
-              const isConnected = connectedServices.includes(service.id)
-              return (
-                <SettingsRow
-                  key={service.id}
-                  label={service.name}
-                  type="text"
-                  value={isConnected ? 'conectado' : 'desconectado'}
-                />
-              )
-            })}
+            <h3 className="settings-section-title">ATAJOS DE TECLADO</h3>
+            <SettingsRow label="Apple Music"      type="shortcut" value="Ctrl+1" />
+            <SettingsRow label="Spotify"          type="shortcut" value="Ctrl+2" />
+            <SettingsRow label="YouTube Music"    type="shortcut" value="Ctrl+3" />
+            <SettingsRow label="Tidal"            type="shortcut" value="Ctrl+4" />
+            <SettingsRow label="Deezer"           type="shortcut" value="Ctrl+5" />
+            <SettingsRow label="Command Palette"  type="shortcut" value="Ctrl+K" />
+            <SettingsRow label="Play / Pause"     type="shortcut" value="Espacio" />
+            <SettingsRow label="Cerrar overlay"   type="shortcut" value="Escape" />
+            <SettingsRow label="Teclas multimedia" type="shortcut" value="MediaPlay / Next / Prev" />
           </section>
+          )}
+
+          {activeTab === 'datos' && (
+          <section className="settings-section-card">
+            <h3 className="settings-section-title">ESTADÍSTICAS</h3>
+            <SettingsRow label="Guardar historial" type="toggle" value={statsEnabled} onChange={handleStatsToggle} />
+            <SettingsRow label="Exportar datos" type="button" onChange={handleExport} />
+            <SettingsRow
+              label={pendingClearConfirm ? '¿Confirmar borrado?' : 'Borrar estadísticas'}
+              type="button"
+              buttonText={pendingClearConfirm ? 'Confirmar' : 'Borrar'}
+              onChange={handleClearStats}
+            />
+          </section>
+          )}
+
         </div>
       </aside>
     </>

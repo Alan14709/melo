@@ -55,9 +55,9 @@ const ArtworkGradient = memo(function ArtworkGradient({ opacity = 1 }) {
         className="artwork-gradient-layer layer-base"
         style={{
           background: `
-            radial-gradient(ellipse 80% 60% at 20% 80%, ${hexToRgba(colors.c1, 0.9)} 0%, transparent 70%),
-            radial-gradient(ellipse 60% 80% at 80% 20%, ${hexToRgba(colors.c2, 0.8)} 0%, transparent 65%),
-            radial-gradient(ellipse 100% 100% at 50% 50%, ${hexToRgba(colors.c3, 0.4)} 0%, transparent 80%)
+            radial-gradient(ellipse 80% 60% at 20% 80%, ${hexToRgba(colors.c1, 0.65)} 0%, transparent 70%),
+            radial-gradient(ellipse 60% 80% at 80% 20%, ${hexToRgba(colors.c2, 0.55)} 0%, transparent 65%),
+            radial-gradient(ellipse 100% 100% at 50% 50%, ${hexToRgba(colors.c3, 0.28)} 0%, transparent 80%)
           `,
         }}
       />
@@ -65,10 +65,10 @@ const ArtworkGradient = memo(function ArtworkGradient({ opacity = 1 }) {
       <div
         className="artwork-gradient-layer layer-float"
         style={{
-          opacity: 0.9,
+          opacity: 0.7,
           background: `
-            radial-gradient(ellipse 70% 50% at 70% 70%, ${hexToRgba(colors.c4, 0.6)} 0%, transparent 60%),
-            radial-gradient(ellipse 50% 70% at 30% 30%, ${hexToRgba(colors.c1, 0.5)} 0%, transparent 55%)
+            radial-gradient(ellipse 70% 50% at 70% 70%, ${hexToRgba(colors.c4, 0.4)} 0%, transparent 60%),
+            radial-gradient(ellipse 50% 70% at 30% 30%, ${hexToRgba(colors.c1, 0.32)} 0%, transparent 55%)
           `,
         }}
       />

@@ -37,7 +37,8 @@ export default function ServicePicker({ onSelect }) {
 
       <div className="picker-header no-drag">
         <h1 className="melo-logo">melo</h1>
-        <p className="melo-tagline">tu musica, sin limites</p>
+        <p className="melo-tagline">tu música, sin límites.</p>
+        <p className="picker-hint">Elige un servicio para empezar</p>
       </div>
 
       <div className="services-grid no-drag">
@@ -47,12 +48,16 @@ export default function ServicePicker({ onSelect }) {
             service={service}
             onClick={() => onSelect(service)}
             delayMs={index * 70}
-            className="glass-card animate-spring-in"
+            className="animate-spring-in"
             style={{ animationDelay: `${index * 60}ms` }}
             isConnected={connectedIds.includes(service.id)}
           />
         ))}
       </div>
+
+      <p className="picker-footer no-drag">
+        Conecta cualquier servicio · cambia en cualquier momento
+      </p>
     </div>
   )
 }
