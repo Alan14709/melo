@@ -1,88 +1,152 @@
 # Melo
 
-![Version](https://img.shields.io/badge/version-v1.6.5-success)
+![Version](https://img.shields.io/badge/version-v1.7.0-success)
 ![Platform](https://img.shields.io/badge/platform-Linux-blue)
 ![Node](https://img.shields.io/badge/node-20_LTS-339933)
 ![DRM](https://img.shields.io/badge/DRM-Widevine%20WVCUS-green)
 ![Stack](https://img.shields.io/badge/stack-Electron%20%2B%20React%20%2B%20Vite-black)
 
-Melo es una app de escritorio Linux para musica en streaming sobre Electron, con integraciones de sistema, persistencia de sesion por servicio y soporte DRM con Widevine.
+Melo es una app de escritorio Linux para música en streaming sobre Electron. Envuelve Apple Music, Spotify, YouTube Music, Tidal y Deezer en una sola interfaz nativa con integraciones de sistema, persistencia de sesión por servicio y soporte DRM con Widevine.
 
-## Version actual
+---
 
-- Release estable: **v1.6.5**
-- Targets Linux: **AppImage** y **DEB**
-- CI/CD: GitHub Actions con publicacion automatica por tag
+## Novedades v1.7.0
 
-## Novedades v1.6.5
+### 🎨 UI Redesign completo
 
-- Pipeline de release reforzado para castLabs (WVCUS) con fallback por versiones.
-- Instalacion robusta de Electron con limpieza total por intento.
-- Validacion obligatoria de Widevine antes de permitir build de produccion.
-- Bloqueo de publicacion si se activa fallback de debug.
-- Workflow opcional de debug para recolectar logs cuando falla release.
+**Estadísticas**
+- Hero editorial con tiempo total y artista top
+- Racha de escucha (streak) con récord histórico
+- Tarjeta Melo Monthly: resumen visual de tiempo, artista, canción y servicio top
+- Sección de reproducción reciente desde el historial en vivo
+- Insights en lenguaje natural generados desde los datos de actividad
+- Cada sección en su propio card oscuro para garantizar legibilidad
+
+**Sidebar**
+- Grupos con headers de sección (Servicios / Melo)
+- Indicador activo: barra lateral con el color del servicio
+- Pip animado de now-playing en el servicio activo
+- Toggle de Focus Mode integrado
+
+**Command Palette**
+- Acciones agrupadas por categoría (Servicios / Reproducción / Navegación / Interfaz)
+- Hints de teclado por acción
+- Footer con guía de navegación (↑↓ / ↵ / ⌘K)
+
+**Settings Panel**
+- Navegación por 6 tabs: Servicios · Apariencia · Sistema · Integraciones · Atajos · Datos
+
+### 🎯 Focus Mode
+- Nuevo modo de concentración: sidebar, topbar y playerbar se difuminan a baja opacidad
+- Cada elemento recupera opacidad completa al pasar el cursor
+- Oculta banners de actualización, offline y salud del sistema
+- Toggle desde sidebar o Command Palette
+
+### 🔧 Estabilidad de BrowserView
+- `scheduleBoundsUpdate(delayMs)` centralizado — un único path debounced para todos los eventos de resize
+- Handlers adicionales: `moved`, `enter-full-screen`, `leave-full-screen`, `restore`
+- Bounds integer-aligned (`Math.floor`) para evitar drift en pantallas con DPI fraccional
+- Constantes `TOP_HEIGHT` y `BOTTOM_HEIGHT` corregidas para coincidir con los tokens CSS del layout
+- Auto-resize de Electron deshabilitado en BrowserViews — bounds manuales con control total
+- **Bug de loading bar resuelto**: `did-stop-loading`, `did-finish-load`, completación de switch y timeout de lock ahora envían `isLoading: false` correctamente
+
+### ⌨️ Teclado
+- **Space** ya no se intercepta desde BrowserViews — Apple Music, Spotify y el resto lo reciben de forma nativa (scroll, typing, etc.)
+- **K** es el nuevo shortcut de play/pause (estilo YouTube / VLC)
+
+### 🌈 Gradiente de artwork
+- Opacidad de capas reducida para mejorar legibilidad del texto sobre el gradiente
+- Viñeta reforzada en las áreas de contenido
+- Intensidad del chroma drift reducida
+- Scrim del stats-view en 0.76 de opacidad
+
+---
 
 ## Servicios soportados
 
-- Apple Music
-- Spotify
-- YouTube Music
-- Tidal
-- Deezer
+| Servicio | Shortcut |
+|---|---|
+| Apple Music | `⌘1` / `Ctrl+1` |
+| Spotify | `⌘2` / `Ctrl+2` |
+| YouTube Music | `⌘3` / `Ctrl+3` |
+| Tidal | `⌘4` / `Ctrl+4` |
+| Deezer | `⌘5` / `Ctrl+5` |
+
+---
 
 ## Especificaciones funcionales
 
-### Reproduccion e interfaz
+### Reproducción e interfaz
 
-- Shell de reproductor multi-servicio con cambio rapido de proveedor.
-- Ultimo servicio persistido entre reinicios.
-- Control desde bandeja de sistema (tray).
-- Modo inmersivo para UI.
-- Volumen persistente.
+- Shell multi-servicio con cambio rápido de proveedor
+- Último servicio persistido entre reinicios
+- Control desde bandeja de sistema (tray)
+- Modo inmersivo y Focus Mode
+- Volumen persistente
+- Mini Player (Picture-in-Picture)
+
+### Estadísticas de escucha
+
+- Historial de reproducción en tiempo real
+- Resumen por período: hoy, semana, mes, año, todo
+- Top artistas y canciones con barras de progreso
+- Desglose de tiempo por servicio
+- Heatmap de actividad anual (estilo GitHub)
+- Racha de días consecutivos
+- Exportación JSON
 
 ### Integraciones del sistema
 
-- Media keys globales.
-- Notificaciones nativas.
-- MPRIS para GNOME/KDE.
-- Auto inicio Linux via .desktop.
-- Discord Rich Presence.
-- Last.fm scrobbling.
+- Media keys globales
+- Notificaciones nativas
+- MPRIS para GNOME / KDE
+- Auto inicio Linux vía `.desktop`
+- Discord Rich Presence
+- Last.fm scrobbling
 
 ### Persistencia y estabilidad
 
-- Sesion persistente por servicio (cookies/localStorage/IndexedDB).
-- Manejo de salud y reintentos para procesos criticos.
-- Cache local de artwork.
-- Estrategias de fallback para GPU/sandbox en Linux.
+- Sesión persistente por servicio (cookies / localStorage / IndexedDB)
+- Manejo de salud y reintentos para procesos críticos
+- Caché local de artwork
+- Estrategias de fallback para GPU/sandbox en Linux
 
 ### DRM y media
 
-- Integracion Widevine para compatibilidad con streaming protegido.
-- Configuracion de pipeline para castLabs WVCUS en CI.
-- Validacion de libreria Widevine en install:
-  - `node_modules/electron/dist/libwidevinecdm.so`
+- Integración Widevine para streaming protegido
+- Pipeline castLabs WVCUS en CI
+- Validación de `libwidevinecdm.so` en install
 
-## Stack tecnico
+---
 
-- Electron (main/preload)
-- React 18
-- Zustand
-- Vite
-- electron-builder
-- electron-updater
-- electron-store
-- dbus-next
-- discord-rpc
+## Stack técnico
+
+| Capa | Tecnología |
+|---|---|
+| Shell | Electron (main / preload) |
+| UI | React 18 + Vite |
+| Estado | Zustand |
+| Empaquetado | electron-builder + electron-updater |
+| Persistencia | electron-store |
+| Integraciones | dbus-next, discord-rpc |
+
+---
 
 ## Arquitectura del proyecto
 
-- `main.js`: ciclo de vida Electron, BrowserView, IPC e integraciones.
-- `preload.js`: bridge seguro para renderer.
-- `renderer/src/`: UI React y estado global.
-- `integrations/`: Discord, Last.fm, MPRIS, notificaciones, updater.
-- `services/`: retry/health/gpu/autostart/cache/adapters.
-- `tests/`: unit tests de componentes de estabilidad.
+```
+main.js              — ciclo de vida Electron, BrowserView, IPC, integraciones
+preload.js           — bridge seguro para renderer
+renderer/src/        — UI React y estado global (Zustand)
+  components/        — App, Sidebar, StatsView, CommandPalette, SettingsPanel…
+  store/             — usePlayerStore (estado global)
+  styles/            — globals.css, artwork-gradient.css, themes.css
+integrations/        — Discord, Last.fm, MPRIS, notificaciones, updater
+services/            — retry, health, gpu, autostart, cache, adapters
+tests/               — unit tests de componentes de estabilidad
+```
+
+---
 
 ## Requisitos
 
@@ -91,7 +155,9 @@ Melo es una app de escritorio Linux para musica en streaming sobre Electron, con
 - npm
 - git
 
-## Instalacion para desarrollo
+---
+
+## Instalación para desarrollo
 
 ```bash
 npm install
@@ -101,8 +167,8 @@ npm run dev
 ## Scripts principales
 
 ```bash
-npm run dev
-npm run build
+npm run dev          # dev server + Electron
+npm run build        # build de producción (Vite + electron-builder)
 npm run test
 npm run test:unit
 npm run test:syntax
@@ -110,98 +176,50 @@ npm run release:linux
 npm run release:publish
 ```
 
-## Build local
+---
+
+## Instalación de artefactos
+
+### AppImage (cualquier distro)
 
 ```bash
-npm install
-npm run build
+chmod +x Melo-1.7.0.AppImage
+./Melo-1.7.0.AppImage
 ```
 
-Artefactos esperados:
-
-- `dist-electron/Melo-1.6.5.AppImage`
-- `dist-electron/melo_1.6.5_amd64.deb`
-
-## Instalacion de artefactos
-
-### AppImage
+### DEB (Debian / Ubuntu)
 
 ```bash
-chmod +x Melo-*.AppImage
-./Melo-*.AppImage
-```
-
-### DEB
-
-```bash
-sudo dpkg -i dist-electron/melo_*.deb
+sudo dpkg -i Melo-1.7.0.deb
 sudo apt-get install -f -y
 ```
 
-## Pipeline de release (produccion)
+---
 
-Workflow principal:
+## Pipeline de release (producción)
 
-- `.github/workflows/release.yml`
+Workflow principal: `.github/workflows/release.yml`
 
-Reglas clave del pipeline:
+1. Ejecuta en `ubuntu-latest` con Node 20
+2. Instala Electron castLabs con fallback secuencial (`28.x`, `27.x`, `26.x` WVCUS)
+3. Valida runtime DRM (`libwidevinecdm.so`) antes de build
+4. Si castLabs falla en todas las versiones → fallback debug, bloquea publicación
+5. Solo publica release si castLabs fue exitoso
+6. Publicación idempotente con `softprops/action-gh-release`
 
-1. Ejecuta en `ubuntu-latest` con Node 20.
-2. Fija version de app a `1.6.5`.
-3. Instala Electron castLabs con fallback secuencial:
-   - `28.2.10+wvcus`
-   - `27.3.11+wvcus`
-   - `26.6.10+wvcus`
-4. Nunca usa castLabs 30.x.
-5. En cada intento limpia:
-   - `node_modules`
-   - `~/.cache/electron`
-   - `package-lock.json`
-6. Hace reintentos de `npm install` por version.
-7. Requiere validacion de runtime DRM (archivo `libwidevinecdm.so` o evidencia de artefacto castLabs descargado en cache).
-8. Si castLabs falla en todas las versiones:
-   - fallback a Electron oficial solo debug
-   - marca `DEBUG_BUILD=true`
-   - bloquea publicacion de produccion
-9. Solo publica release si castLabs fue exitoso.
-10. Publicacion idempotente: build + upload de artefactos a release con `softprops/action-gh-release`.
-11. El empaquetado fuerza `electronVersion=<version+wvcus>` en electron-builder para evitar 404 por nombre de artefacto.
-
-Workflow opcional de debug:
-
-- `.github/workflows/release-debug.yml`
-- Se activa cuando falla `Release Melo` y sube logs como artifact.
-
-## Flujo de release recomendado
-
-1. Confirmar cambios:
+### Flujo de release manual
 
 ```bash
-git status
-```
+# 1. Bump de versión en package.json
+# 2. Commit + tag
+git tag -a v1.x.x -m "Release 1.x.x"
 
-2. Crear commit en `main`.
-
-3. Crear tag de release:
-
-```bash
-git tag -a v1.6.5 -m "Release 1.6.5"
-```
-
-4. Publicar:
-
-```bash
+# 3. Push
 git push origin main
-git push origin v1.6.5
+git push origin v1.x.x
 ```
 
-5. Verificar en GitHub Actions que el job `Release Melo` termine en verde.
-
-## Notas de operacion
-
-- Si `DEBUG_BUILD=true`, el release se bloquea por seguridad.
-- El workflow usa `GH_TOKEN` y, si no existe, hace fallback a `github.token` para publicar.
-- Para diagnostico de fallos de release, revisar artifacts del workflow `Release Debug Melo`.
+---
 
 ## Licencia
 
