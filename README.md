@@ -1,6 +1,6 @@
 # Melo
 
-![Version](https://img.shields.io/badge/version-v1.7.0-success)
+![Version](https://img.shields.io/badge/version-v1.8.0-success)
 ![Platform](https://img.shields.io/badge/platform-Linux-blue)
 ![Node](https://img.shields.io/badge/node-20_LTS-339933)
 ![DRM](https://img.shields.io/badge/DRM-Widevine%20WVCUS-green)
@@ -10,57 +10,65 @@ Melo es una app de escritorio Linux para música en streaming sobre Electron. En
 
 ---
 
-## Novedades v1.7.0
+## Novedades v1.8.0
 
-### 🎨 UI Redesign completo
+### 📊 Monitor de recursos
 
-**Estadísticas**
-- Hero editorial con tiempo total y artista top
-- Racha de escucha (streak) con récord histórico
-- Tarjeta Melo Monthly: resumen visual de tiempo, artista, canción y servicio top
-- Sección de reproducción reciente desde el historial en vivo
-- Insights en lenguaje natural generados desde los datos de actividad
-- Cada sección en su propio card oscuro para garantizar legibilidad
+Nueva pestaña **Rendimiento** en Ajustes. Cada servicio corre en su propio
+proceso de Electron, así que se puede atribuir consumo real a cada uno:
 
-**Sidebar**
-- Grupos con headers de sección (Servicios / Melo)
-- Indicador activo: barra lateral con el color del servicio
-- Pip animado de now-playing en el servicio activo
-- Toggle de Focus Mode integrado
+- CPU, memoria, número de procesos y tiempo en marcha, con gráficas de línea
+- Qué servicio consume más, con su porcentaje del total
+- Desglose por proceso con el color de cada servicio
+- Bloque de diagnóstico (latencia de cambio, vistas fantasma, fallbacks de GPU)
+  visible solo con el puente de depuración activo
 
-**Command Palette**
-- Acciones agrupadas por categoría (Servicios / Reproducción / Navegación / Interfaz)
-- Hints de teclado por acción
-- Footer con guía de navegación (↑↓ / ↵ / ⌘K)
+### 🌙 Temporizador de apagado
 
-**Settings Panel**
-- Navegación por 6 tabs: Servicios · Apariencia · Sistema · Integraciones · Atajos · Datos
+Pausa la música tras 15, 30 o 60 minutos desde el Command Palette. El reloj vive
+en el proceso principal, así que sigue corriendo con la ventana minimizada en la
+bandeja. Píldora con cuenta atrás y aviso al quedar un minuto.
 
-### 🎯 Focus Mode
-- Nuevo modo de concentración: sidebar, topbar y playerbar se difuminan a baja opacidad
-- Cada elemento recupera opacidad completa al pasar el cursor
-- Oculta banners de actualización, offline y salud del sistema
-- Toggle desde sidebar o Command Palette
+### 🔀 Contexto entre servicios
 
-### 🔧 Estabilidad de BrowserView
-- `scheduleBoundsUpdate(delayMs)` centralizado — un único path debounced para todos los eventos de resize
-- Handlers adicionales: `moved`, `enter-full-screen`, `leave-full-screen`, `restore`
-- Bounds integer-aligned (`Math.floor`) para evitar drift en pantallas con DPI fraccional
-- Constantes `TOP_HEIGHT` y `BOTTOM_HEIGHT` corregidas para coincidir con los tokens CSS del layout
-- Auto-resize de Electron deshabilitado en BrowserViews — bounds manuales con control total
-- **Bug de loading bar resuelto**: `did-stop-loading`, `did-finish-load`, completación de switch y timeout de lock ahora envían `isLoading: false` correctamente
+El centro de la barra de reproducción muestra lo que el servicio embebido no
+puede saber: cuántas veces has puesto esa canción y en qué **otros** servicios.
+Sin coincidencias, cae a contexto de sesión y racha.
 
-### ⌨️ Teclado
-- **Space** ya no se intercepta desde BrowserViews — Apple Music, Spotify y el resto lo reciben de forma nativa (scroll, typing, etc.)
-- **K** es el nuevo shortcut de play/pause (estilo YouTube / VLC)
+### 🔎 Buscar la canción en otro servicio
 
-### 🌈 Gradiente de artwork
-- Opacidad de capas reducida para mejorar legibilidad del texto sobre el gradiente
-- Viñeta reforzada en las áreas de contenido
-- Intensidad del chroma drift reducida
-- Scrim del stats-view en 0.76 de opacidad
+Menú en la canción (o clic derecho) para saltar a Apple Music, YouTube Music,
+Tidal o Deezer con la pista ya buscada. Es un menú nativo: los popups del sistema
+flotan sobre el BrowserView, cosa que ningún panel HTML puede hacer.
+
+### 🎵 Mini Player como widget
+
+Rediseñado como previsualización: carátula, título, artista, álbum y servicio,
+con el fondo teñido por la carátula. Sin controles de reproducción — los trae el
+propio servicio, y replicarlos obligaba a inyectar JS en su DOM.
+
+### 🐛 Correcciones importantes
+
+- **Escape y Ctrl+K** dejaban de funcionar en todo el escritorio mientras Melo
+  estuviera abierto, incluso minimizado en la bandeja
+- **Estadísticas desfasadas un día**: el heatmap agrupaba en UTC mientras el
+  resto usaba hora local
+- **Anterior y siguiente** nunca funcionaron: dependían de selectores atados al
+  idioma de la web. Ahora se envían teclas multimedia reales
+- **«Escuchado recientemente»** y el export de historial salían vacíos
+- **El ajuste «Estadísticas»** no dejaba de grabar al desactivarlo
+- **Tema claro**: la escala de texto estaba invertida y dejaba las cabeceras del
+  sidebar blancas sobre blanco
+
+### ♿ Accesibilidad
+
+Focus trap en los modales, patrón ARIA de pestañas en Ajustes, combobox en el
+Command Palette, navegación por teclado en los deslizadores y contraste
+verificado en cinco temas.
 
 ---
+
+## Novedades v1.7.0
 
 ## Servicios soportados
 
@@ -183,14 +191,14 @@ npm run release:publish
 ### AppImage (cualquier distro)
 
 ```bash
-chmod +x Melo-1.7.0.AppImage
-./Melo-1.7.0.AppImage
+chmod +x Melo-1.8.0.AppImage
+./Melo-1.8.0.AppImage
 ```
 
 ### DEB (Debian / Ubuntu)
 
 ```bash
-sudo dpkg -i Melo-1.7.0.deb
+sudo dpkg -i Melo-1.8.0.deb
 sudo apt-get install -f -y
 ```
 
