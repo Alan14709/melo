@@ -1,6 +1,8 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, memo } from 'react'
 import { Clock, Music, Headphones, BarChart2, Calendar, TrendingUp, Download, Flame, Zap } from 'lucide-react'
 import { usePlayerStore } from '../store/usePlayerStore'
+import { localDayKey, todayKey, shiftDayKey } from '../utils/dateKeys'
+import { SERVICES } from '../../../services/registry'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -62,48 +64,29 @@ function buildInsights(summary) {
 }
 
 function computeStreak(activityMap = {}) {
-  const dates = Object.keys(activityMap).filter((d) => activityMap[d] > 0).sort().reverse()
-  if (!dates.length) return { current: 0, longest: 0 }
+  const active = new Set(Object.keys(activityMap).filter((day) => activityMap[day] > 0))
+  if (active.size === 0) return { current: 0, longest: 0 }
 
-  let current = 0
+  // Racha mas larga: recorre los dias activos en orden y corta cuando el salto
+  // respecto al anterior no es exactamente de un dia.
   let longest = 0
-  let streak = 0
+  let run = 0
   let prev = null
-
-  const now = new Date()
-  const todayStr = now.toISOString().split('T')[0]
-  const yesterdayStr = new Date(now - 86400000).toISOString().split('T')[0]
-
-  const hasToday = activityMap[todayStr] > 0
-  const hasYesterday = activityMap[yesterdayStr] > 0
-
-  const allDates = Object.keys(activityMap).filter((d) => activityMap[d] > 0).sort()
-
-  for (const dateStr of allDates) {
-    if (!prev) {
-      streak = 1
-    } else {
-      const diff = (new Date(dateStr) - new Date(prev)) / 86400000
-      if (diff === 1) {
-        streak += 1
-      } else {
-        streak = 1
-      }
-    }
-    if (streak > longest) longest = streak
-    prev = dateStr
+  for (const day of [...active].sort()) {
+    run = prev && shiftDayKey(prev, 1) === day ? run + 1 : 1
+    if (run > longest) longest = run
+    prev = day
   }
 
-  if (hasToday || hasYesterday) {
-    let cur = 0
-    let checkDate = new Date(hasToday ? todayStr : yesterdayStr)
-    while (true) {
-      const ds = checkDate.toISOString().split('T')[0]
-      if (!activityMap[ds] || activityMap[ds] === 0) break
-      cur++
-      checkDate = new Date(checkDate - 86400000)
-    }
-    current = cur
+  // Racha actual: solo sigue viva si hay escucha hoy o ayer.
+  const today = todayKey()
+  const yesterday = shiftDayKey(today, -1)
+  let cursor = active.has(today) ? today : active.has(yesterday) ? yesterday : null
+
+  let current = 0
+  while (cursor && active.has(cursor)) {
+    current += 1
+    cursor = shiftDayKey(cursor, -1)
   }
 
   return { current, longest }
@@ -111,7 +94,7 @@ function computeStreak(activityMap = {}) {
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
-function StatsHero({ summary }) {
+const StatsHero = memo(function StatsHero({ summary }) {
   const totalTime = fmtTime(summary.totalHours, summary.totalMinutes)
   const topArtist = summary.topArtists?.[0]?.name
   const topService = summary.serviceStats?.[0]
@@ -152,9 +135,9 @@ function StatsHero({ summary }) {
       </div>
     </div>
   )
-}
+})
 
-function StatCard({ icon: Icon, value, label, color }) {
+const StatCard = memo(function StatCard({ icon: Icon, value, label, color }) {
   return (
     <div className="stat-card">
       <div className="stat-card-icon" style={{ color: color || 'var(--accent)' }}>
@@ -166,7 +149,7 @@ function StatCard({ icon: Icon, value, label, color }) {
       <p className="stat-card-label">{label}</p>
     </div>
   )
-}
+})
 
 function InsightsSection({ insights }) {
   if (!insights.length) return null
@@ -196,28 +179,34 @@ function TopBar({ name, count, max, color, rank }) {
   )
 }
 
-function ActivityGrid({ activityMap = {} }) {
-  const weeks = []
-  const now = new Date()
-  const start = new Date(now)
-  start.setDate(start.getDate() - 364)
+const ActivityGrid = memo(function ActivityGrid({ activityMap = {} }) {
+  // 371 celdas con su Date: fuera del render para no rehacerlas en cada pintado.
+  const weeks = useMemo(() => {
+    const cursor = new Date()
+    cursor.setHours(12, 0, 0, 0) // mediodia local: inmune a saltos de horario de verano
+    cursor.setDate(cursor.getDate() - 364)
+    cursor.setDate(cursor.getDate() - cursor.getDay()) // alinear al domingo
 
-  let current = new Date(start)
-  current.setDate(current.getDate() - current.getDay())
+    const maxCount = Math.max(1, ...Object.values(activityMap))
+    const built = []
 
-  const maxCount = Math.max(1, ...Object.values(activityMap))
-
-  for (let w = 0; w < 53; w++) {
-    const week = []
-    for (let d = 0; d < 7; d++) {
-      const dateStr = current.toISOString().split('T')[0]
-      const count = activityMap[dateStr] || 0
-      const intensity = count === 0 ? 0 : Math.ceil((count / maxCount) * 4)
-      week.push({ date: dateStr, count, intensity })
-      current.setDate(current.getDate() + 1)
+    for (let w = 0; w < 53; w++) {
+      const week = []
+      for (let d = 0; d < 7; d++) {
+        const date = localDayKey(cursor)
+        const count = activityMap[date] || 0
+        week.push({
+          date,
+          count,
+          intensity: count === 0 ? 0 : Math.ceil((count / maxCount) * 4),
+        })
+        cursor.setDate(cursor.getDate() + 1)
+      }
+      built.push(week)
     }
-    weeks.push(week)
-  }
+
+    return built
+  }, [activityMap])
 
   return (
     <div className="activity-grid-wrapper">
@@ -243,7 +232,7 @@ function ActivityGrid({ activityMap = {} }) {
       </div>
     </div>
   )
-}
+})
 
 function StreakCard({ streak }) {
   if (!streak || streak.current === 0) return null
@@ -266,35 +255,74 @@ function StreakCard({ streak }) {
   )
 }
 
-function RecentlyPlayed({ history }) {
-  if (!history || history.length === 0) return null
-  const recent = history.slice(0, 8)
+function fmtRelative(timestamp) {
+  if (!timestamp) return null
+  const minutes = Math.round((Date.now() - timestamp) / 60000)
+  if (minutes < 1) return 'ahora'
+  if (minutes < 60) return `hace ${minutes} min`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `hace ${hours} h`
+  const days = Math.round(hours / 24)
+  if (days === 1) return 'ayer'
+  if (days < 7) return `hace ${days} días`
+  return new Date(timestamp).toLocaleDateString('es', { day: 'numeric', month: 'short' })
+}
+
+// Lee el historial PERSISTIDO de main, no el array en memoria del store: ese
+// se vacia en cada arranque y dejaba la seccion siempre vacia al abrir la app.
+const RecentlyPlayed = memo(function RecentlyPlayed({ refreshKey }) {
+  const [recent, setRecent] = useState([])
+
+  useEffect(() => {
+    let cancelled = false
+
+    window.melo.stats.getHistory({ limit: 8 })
+      .then((rows) => {
+        if (!cancelled) setRecent(Array.isArray(rows) ? rows : [])
+      })
+      .catch(() => {})
+
+    return () => { cancelled = true }
+  }, [refreshKey])
+
+  if (recent.length === 0) return null
+
   return (
     <div className="stats-section">
       <h3 className="stats-section-title">Escuchado recientemente</h3>
-      <div className="recent-list">
-        {recent.map((track, i) => (
-          <div key={i} className="recent-item">
-            <span className="recent-item-index">{i + 1}</span>
-            <div className="recent-item-info">
-              <p className="recent-item-title">{track.title}</p>
-              {track.artist && <p className="recent-item-artist">{track.artist}</p>}
-            </div>
-            {track.serviceId && (
-              <span
-                className="recent-item-dot"
-                style={{ background: track.color || 'var(--accent)' }}
-                title={track.serviceId}
-              />
-            )}
-          </div>
-        ))}
-      </div>
+      <ol className="recent-list">
+        {recent.map((track, i) => {
+          const service = SERVICES[track.service]
+          return (
+            <li key={`${track.playedAt}-${i}`} className="recent-item">
+              {track.artwork ? (
+                <img className="recent-item-art" src={track.artwork} alt="" loading="lazy" />
+              ) : (
+                <span className="recent-item-art recent-item-art-empty" aria-hidden="true">
+                  <Music size={12} />
+                </span>
+              )}
+              <div className="recent-item-info">
+                <p className="recent-item-title">{track.title}</p>
+                {track.artist && <p className="recent-item-artist">{track.artist}</p>}
+              </div>
+              <span className="recent-item-time">{fmtRelative(track.playedAt)}</span>
+              {service && (
+                <span
+                  className="recent-item-dot"
+                  style={{ background: service.color }}
+                  title={service.name}
+                />
+              )}
+            </li>
+          )
+        })}
+      </ol>
     </div>
   )
-}
+})
 
-function MeloMonthlyCard({ summary }) {
+const MeloMonthlyCard = memo(function MeloMonthlyCard({ summary }) {
   const topArtist = summary.topArtists?.[0]
   const topTrack = summary.topTracks?.[0]
   const topService = summary.serviceStats?.[0]
@@ -332,7 +360,7 @@ function MeloMonthlyCard({ summary }) {
       </div>
     </div>
   )
-}
+})
 
 // ─── Period selector ─────────────────────────────────────────────────────────
 
@@ -350,7 +378,8 @@ export default function StatsView() {
   const [summary, setSummary] = useState(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState('Todo')
-  const playHistory = usePlayerStore((s) => s.playHistory)
+  // Solo el titulo: refresca la lista de recientes sin suscribirse al store entero.
+  const currentTrackTitle = usePlayerStore((s) => s.currentTrack?.title)
 
   const loadSummary = async (periodLabel) => {
     const selected = PERIODS.find((p) => p.label === periodLabel)
@@ -515,7 +544,7 @@ export default function StatsView() {
       </div>
 
       {/* ── Recently played ───────────────────────────────────────── */}
-      <RecentlyPlayed history={playHistory} />
+      <RecentlyPlayed refreshKey={currentTrackTitle} />
 
       {/* ── Activity heatmap ──────────────────────────────────────── */}
       <div className="stats-section">

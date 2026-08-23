@@ -31,7 +31,10 @@
   --text-primary:     rgb(255, 255, 255);
   --text-secondary:   rgba(255, 255, 255, 0.95);
   --text-tertiary:    rgba(255, 255, 255, 0.85);
-  --text-quaternary:  rgba(255, 255, 255, 0.72);
+  /* Debe ser el más tenue de la escala. Estaba en 0.72 — más brillante que
+     --text-tertiary (0.30) — e invertía la jerarquía. Cada tema lo define
+     ahora en themes.css; esto es solo el respaldo. */
+  --text-quaternary:  rgba(255, 255, 255, 0.22);
   --text-accent:      var(--accent);
 
   /* Accent */
@@ -1363,86 +1366,197 @@ input:focus {
   padding: 8px;
 }
 
+/* ============================================================
+   MINI PLAYER — widget flotante de previsualización
+   Sin controles: solo qué suena. La ventana es transparente,
+   así que el widget pinta su propio fondo opaco.
+   ============================================================ */
+
 .mini-player {
+  position: relative;
   width: 100vw;
   height: 100vh;
-  border: 1px solid rgba(255,255,255,0.12);
-  background: rgba(18, 18, 18, 0.86);
-  border-radius: 16px;
-  padding: 10px 12px;
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.12));
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, var(--mini-tint, transparent) 0%, transparent 62%),
+    color-mix(in srgb, var(--bg-card, #121212) 92%, transparent);
+  color: var(--text-primary);
   overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  transition: background 700ms ease;
 }
 
-.mini-drag {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  flex: 1;
+/* Filo superior con el color del servicio: indica de dónde viene lo que suena. */
+.mini-player::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: var(--mini-accent, var(--accent));
+  opacity: 0.85;
+}
+
+.mini-player.is-empty::before { opacity: 0.35; }
+
+.mini-artwork-wrap {
+  position: relative;
+  flex-shrink: 0;
 }
 
 .mini-artwork {
-  width: 56px;
-  height: 56px;
-  border-radius: 8px;
+  width: 58px;
+  height: 58px;
+  border-radius: 9px;
   object-fit: cover;
+  display: block;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.32);
 }
 
-.mini-artwork-placeholder {
-  width: 56px;
-  height: 56px;
-  border-radius: 8px;
-  background: var(--bg-hover);
-  color: var(--text-secondary);
+.mini-artwork.placeholder {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  box-shadow: none;
+}
+
+/* Indicador de estado, no un control: no se puede pulsar. */
+.mini-eq {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 11px;
+  padding: 2px 3px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+}
+
+.mini-eq i {
+  display: block;
+  width: 2px;
+  height: 100%;
+  border-radius: 1px;
+  background: var(--mini-accent, var(--accent));
+  transform-origin: bottom;
+  animation: mini-eq-bounce 900ms ease-in-out infinite;
+}
+
+.mini-eq i:nth-child(2) { animation-delay: 160ms; animation-duration: 720ms; }
+.mini-eq i:nth-child(3) { animation-delay: 320ms; animation-duration: 1040ms; }
+
+@keyframes mini-eq-bounce {
+  0%, 100% { transform: scaleY(0.35); }
+  50%      { transform: scaleY(1); }
 }
 
 .mini-info {
+  flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .mini-title {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--weight-semibold, 600);
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Antes no recortaba: un artista largo desbordaba el widget. */
 .mini-artist {
   font-size: 11px;
   color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.mini-controls {
+.mini-service {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
+  margin-top: 2px;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  /* Mezclado con --text-primary, no con --text-secondary: así el color del
+     servicio se oscurece solo en tema claro y se aclara en oscuro. Con el
+     secundario, el cian de Tidal (#00ffff) quedaba ilegible sobre blanco. */
+  color: color-mix(in srgb, var(--mini-accent, var(--accent)) 55%, var(--text-primary));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.mini-controls button {
-  width: 28px;
-  height: 28px;
+.mini-service-dot {
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: rgba(255,255,255,0.1);
-  display: inline-flex;
+  flex-shrink: 0;
+  background: var(--mini-accent, var(--accent));
+  /* Aro tenue: define el punto cuando el color del servicio tiene poco
+     contraste contra el fondo (Tidal en claro, por ejemplo). */
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-primary) 22%, transparent);
+}
+
+/* ── Acciones: abrir Melo y cerrar ───────────────────────── */
+
+.mini-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex-shrink: 0;
+  align-self: flex-start;
+  opacity: 0;
+  transition: opacity var(--transition-fast, 150ms);
+}
+
+.mini-player:hover .mini-actions,
+.mini-actions:focus-within {
+  opacity: 1;
+}
+
+.mini-btn {
+  display: flex;
   align-items: center;
   justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
-.mini-play {
-  background: var(--accent) !important;
+.mini-btn:hover {
+  background: var(--bg-active, var(--bg-hover));
+  color: var(--text-primary);
+}
+
+.mini-btn-close:hover {
+  background: #e81123;
   color: #fff;
 }
 
-.mini-close {
-  width: 24px !important;
-  height: 24px !important;
+@media (prefers-reduced-motion: reduce) {
+  .mini-eq i { animation: none; transform: scaleY(0.7); }
+  .mini-player { transition: none; }
 }
 
 .stats-view {
@@ -5338,7 +5452,9 @@ a:focus-visible {
 .sidebar-section-label {
   font-size: 9px;
   font-weight: var(--weight-semibold);
-  color: var(--text-quaternary);
+  /* --text-quaternary es el tono más tenue de la escala (adornos).
+     Estas son cabeceras de sección: tienen que leerse. */
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.1em;
   padding: var(--space-3) var(--space-4) var(--space-1);
@@ -5377,7 +5493,9 @@ a:focus-visible {
   gap: 4px;
   font-size: 9px;
   font-weight: var(--weight-semibold);
-  color: var(--text-quaternary);
+  /* --text-quaternary es el tono más tenue de la escala (adornos).
+     Estas son cabeceras de sección: tienen que leerse. */
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.1em;
   padding: var(--space-3) var(--space-4) var(--space-2);
@@ -5480,7 +5598,9 @@ a:focus-visible {
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
-  color: var(--text-tertiary);
+  /* --text-tertiary daba 2.4:1 en claro y 2.6:1 en oscuro: son etiquetas
+     de navegación, no texto auxiliar. */
+  color: var(--text-secondary);
   font-size: 12px;
   font-weight: var(--weight-medium);
   cursor: pointer;
@@ -5699,17 +5819,9 @@ a:focus-visible {
   transition: opacity var(--transition-slow);
 }
 
-.app-root.focus-mode .sidebar-shell:hover {
-  opacity: 1;
-}
-
 .app-root.focus-mode .topbar {
   opacity: 0.4;
   transition: opacity var(--transition-slow);
-}
-
-.app-root.focus-mode .topbar:hover {
-  opacity: 1;
 }
 
 .app-root.focus-mode .playerbar {
@@ -5717,13 +5829,22 @@ a:focus-visible {
   transition: opacity var(--transition-slow);
 }
 
-.app-root.focus-mode .playerbar:hover {
+/* :focus-within junto a :hover — sin el, tabular en Focus Mode mete el foco a
+   un sidebar al 30% de opacidad, donde ni el anillo de foco es legible. */
+.app-root.focus-mode .sidebar-shell:hover,
+.app-root.focus-mode .sidebar-shell:focus-within,
+.app-root.focus-mode .topbar:hover,
+.app-root.focus-mode .topbar:focus-within,
+.app-root.focus-mode .playerbar:hover,
+.app-root.focus-mode .playerbar:focus-within {
   opacity: 1;
 }
 
+/* Update y offline si se ocultan: son informativos y pueden esperar.
+   El health-banner NO — es el unico aviso de que el renderer entro en modo
+   degradado, y se lleva consigo los botones de recuperacion. */
 .app-root.focus-mode .update-banner,
-.app-root.focus-mode .offline-banner,
-.app-root.focus-mode .health-banner {
+.app-root.focus-mode .offline-banner {
   display: none;
 }
 
@@ -5833,7 +5954,7 @@ a:focus-visible {
 .recent-item-title {
   font-size: 12px;
   font-weight: var(--weight-medium);
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5841,7 +5962,7 @@ a:focus-visible {
 
 .recent-item-artist {
   font-size: 10px;
-  color: rgba(255, 255, 255, 0.50);
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6011,3 +6132,703 @@ a:focus-visible {
   border: 1px solid color-mix(in srgb, var(--service-color) 25%, transparent);
 }
 
+
+/* ============================================================
+   ESCUCHADO RECIENTEMENTE — miniatura y tiempo relativo
+   ============================================================ */
+
+.recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.recent-item-art {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--bg-hover);
+}
+
+.recent-item-art-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-quaternary, var(--text-secondary));
+}
+
+.recent-item-time {
+  font-size: 10px;
+  color: var(--text-quaternary, var(--text-secondary));
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* ============================================================
+   UTILIDADES DE ACCESIBILIDAD
+   ============================================================ */
+
+/* Texto solo para lectores de pantalla: acompaña a los indicadores que hoy
+   solo existen como color o animacion (pip de "sonando", etc.). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ============================================================
+   PLACEHOLDER DEL AREA DE SERVICIO
+   Lo que se ve cuando un overlay obliga a esconder el BrowserView.
+   ============================================================ */
+
+.browser-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  padding: 32px;
+  text-align: center;
+}
+
+.browser-placeholder-art {
+  width: 96px;
+  height: 96px;
+  border-radius: 12px;
+  object-fit: cover;
+  box-shadow: var(--shadow-lg, 0 12px 32px rgba(0, 0, 0, 0.45));
+  margin-bottom: 10px;
+}
+
+.browser-placeholder-art-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-hover);
+  color: var(--text-tertiary, var(--text-secondary));
+  box-shadow: none;
+}
+
+.browser-placeholder-title {
+  font-size: 15px;
+  font-weight: var(--weight-semibold, 600);
+  color: var(--text-primary);
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-placeholder-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ============================================================
+   MOVIMIENTO — el visualizador es decorativo, no debe animarse
+   cuando el usuario pidio menos movimiento.
+   ============================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  .visualizer-bar,
+  .visualizer-bar.playing,
+  .topbar-artwork.spinning,
+  .playerbar-artwork.spinning {
+    animation: none !important;
+  }
+}
+
+/* ============================================================
+   CONTROLES DE VENTANA COMPARTIDOS
+   Un solo estilo para ServicePicker y TopBar (antes: semaforos
+   macOS en uno, iconos estilo Windows en el otro).
+   ============================================================ */
+
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.window-control-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-sm, 5px);
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.window-control-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.window-control-close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
+.picker-window-controls {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+}
+
+/* ============================================================
+   PLAYERBAR — CONTEXTO CRUZADO
+   Ocupa el centro de la barra, donde antes estaba el transporte.
+   Muestra lo que el servicio embebido no puede saber: el historial
+   combinado de todos los servicios.
+   ============================================================ */
+
+.np-context {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-align: center;
+  max-width: 100%;
+  animation: np-context-in 260ms ease both;
+}
+
+@keyframes np-context-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.np-context-primary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: var(--weight-semibold, 600);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.np-context-primary svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.np-context-secondary {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.np-context-service {
+  font-weight: var(--weight-medium, 500);
+}
+
+@media (max-width: 820px) {
+  .playerbar-center { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .np-context { animation: none; }
+}
+
+/* ============================================================
+   BUSCAR ESTA CANCIÓN EN OTRO SERVICIO
+   ============================================================ */
+
+.playerbar-title-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* El desplegable era HTML y quedaba tapado por el BrowserView. Ahora el menú
+   lo abre main como popup nativo; aquí solo queda el disparador. */
+
+.track-search-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-tertiary, var(--text-secondary));
+  cursor: pointer;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+/* Aparece al acercarse a la canción; el foco de teclado también lo revela. */
+.playerbar-left:hover .track-search-trigger,
+.track-search-trigger:focus-visible {
+  opacity: 1;
+}
+
+.track-search-trigger:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ============================================================
+   MONITOR DE RECURSOS
+   Pestaña Rendimiento en Ajustes. Los datos vienen de
+   app.getAppMetrics() con los PID ya traducidos a servicio.
+   ============================================================ */
+
+.rm-root {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+.rm-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 32px 16px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ── Tarjetas de métrica ─────────────────────────────────── */
+
+.rm-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.rm-tile { min-width: 0; }
+
+.rm-tile-value {
+  overflow-wrap: anywhere;
+}
+
+.rm-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 11px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-card, var(--bg-elevated));
+}
+
+.rm-tile-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.rm-tile-label {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.rm-tile-value {
+  font-size: 19px;
+  font-weight: var(--weight-semibold, 600);
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.rm-tile-unit {
+  font-size: 12px;
+  margin-left: 2px;
+  opacity: 0.7;
+}
+
+.rm-spark {
+  width: 100%;
+  height: 26px;
+  display: block;
+  overflow: visible;
+}
+
+.rm-spark-empty {
+  border-bottom: 1px dashed var(--glass-border);
+}
+
+/* ── Servicio que más consume ────────────────────────────── */
+
+.rm-heaviest {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--rm-service-color, var(--glass-border));
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-card, var(--bg-elevated));
+}
+
+.rm-heaviest-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--rm-service-color, var(--accent));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--rm-service-color, var(--accent)) 22%, transparent);
+}
+
+.rm-heaviest-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.rm-heaviest-title {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.rm-heaviest-sub {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+
+/* ── Desglose por proceso ────────────────────────────────── */
+
+.rm-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rm-section-title {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.rm-process-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* minmax(0, 1fr) y no 1fr: un track `1fr` tiene minimo `auto`, y el contenido
+   con nowrap lo empuja hasta desbordar el panel en vez de encogerse. */
+.rm-process {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "dot label stats"
+    "bar bar bar";
+  align-items: center;
+  gap: 7px 8px;
+  padding: 7px 8px 8px;
+  border-radius: var(--radius-sm, 5px);
+  font-size: 11px;
+  transition: background var(--transition-fast);
+}
+
+.rm-process:hover { background: var(--bg-hover); }
+.rm-process.is-service { font-weight: var(--weight-medium, 500); }
+
+.rm-process-dot {
+  grid-area: dot;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  opacity: 0.85;
+}
+
+.rm-process-label {
+  grid-area: label;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* El recorte va en el texto, no en el contenedor: un contenedor flex no aplica
+   text-overflow a sus hijos, y por eso el nombre desbordaba la fila. */
+.rm-process-name {
+  min-width: 0;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rm-process-badge {
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-active, var(--bg-hover));
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.rm-process-stats {
+  grid-area: stats;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.rm-process-cpu,
+.rm-process-mem {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.rm-process-cpu { min-width: 40px; text-align: right; }
+.rm-process-mem { min-width: 56px; text-align: right; }
+
+.rm-process-bar {
+  grid-area: bar;
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.rm-process-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  opacity: 0.55;
+  transition: width 400ms ease;
+}
+
+/* ── Diagnóstico ─────────────────────────────────────────── */
+
+.rm-diag {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
+  gap: 1px;
+  margin: 0;
+  background: var(--glass-border);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm, 5px);
+  overflow: hidden;
+}
+
+.rm-diag > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 11px;
+  background: var(--bg-card, var(--bg-elevated));
+}
+
+.rm-diag dt {
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.rm-diag dd {
+  margin: 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.rm-diag-warn { color: #ff9f0a; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rm-process-bar-fill { transition: none; }
+}
+
+/* ============================================================
+   TEMPORIZADOR DE APAGADO — píldora de cuenta atrás
+   Flota sobre la app; el reloj lo lleva main.
+   ============================================================ */
+
+.sleep-pill {
+  position: fixed;
+  bottom: calc(var(--playerbar-height) + 14px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px 6px 11px;
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg, 0 12px 32px rgba(0, 0, 0, 0.45));
+  backdrop-filter: var(--glass-blur);
+  animation: sleep-pill-in 200ms ease both;
+}
+
+@keyframes sleep-pill-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.sleep-pill svg { color: #a78bfa; flex-shrink: 0; }
+
+.sleep-pill-time {
+  font-size: 12px;
+  font-weight: var(--weight-semibold, 600);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.sleep-pill-cancel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.sleep-pill-cancel:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* En Focus Mode se atenúa como el resto del chrome, pero no desaparece. */
+.app-root.focus-mode .sleep-pill { opacity: 0.5; }
+.app-root.focus-mode .sleep-pill:hover,
+.app-root.focus-mode .sleep-pill:focus-within { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sleep-pill { animation: none; }
+}
+
+/* ============================================================
+   AJUSTES — ANCHO POR PESTAÑA
+   El drawer normal (360px) deja ~300px útiles: suficiente para
+   filas de ajuste, no para la tabla de procesos. Las pestañas
+   con datos densos lo ensanchan en vez de desbordarse.
+   ============================================================ */
+
+.settings-panel {
+  transition:
+    transform var(--motion-base, 320ms) var(--ease-standard, ease),
+    width var(--motion-base, 320ms) var(--ease-standard, ease),
+    box-shadow var(--motion-base, 320ms) var(--ease-standard, ease);
+}
+
+.settings-panel.settings-panel-wide {
+  width: min(620px, calc(100vw - 24px));
+}
+
+/* El contenido nunca debe scrollear en horizontal: si algo no cabe, que scrollee
+   dentro de su propio contenedor. */
+.settings-content {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.settings-content > section {
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-panel { transition: none; }
+}
+
+/* ============================================================
+   AJUSTES — TIRA DE PESTAÑAS
+   Eran overflow-x con el scrollbar oculto: con siete pestañas,
+   las últimas quedaban fuera de vista y sin ninguna pista de
+   que existieran. Envolver muestra todas sin scroll invisible.
+   ============================================================ */
+
+.settings-tabs {
+  flex-wrap: wrap;
+  overflow-x: visible;
+  gap: 2px 3px;
+  row-gap: 4px;
+}
+
+/* ============================================================
+   MONITOR DE RECURSOS — LISTA ACOTADA
+   Con ~20 procesos la lista empujaba el bloque de diagnóstico
+   fuera de alcance. Scrollea dentro de sí misma.
+   ============================================================ */
+
+.rm-process-list {
+  max-height: 260px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Espacio para que el scrollbar no tape las cifras de la derecha. */
+  padding-right: 2px;
+}
+
+.rm-process-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.rm-process-list::-webkit-scrollbar-thumb {
+  background: var(--border, rgba(255, 255, 255, 0.14));
+  border-radius: 3px;
+}
+
+.rm-process-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ============================================================
+   CONTRASTE DEL COLOR DE SERVICIO
+   El color de marca puro sobre el fondo da poco contraste en
+   varios casos (verde de Spotify en claro: 2.38:1, cian de
+   Tidal aún peor). Mezclarlo con --text-primary lo oscurece
+   en tema claro y lo aclara en oscuro, conservando el matiz.
+   ============================================================ */
+
+.service-badge {
+  color: color-mix(in srgb, var(--svc-color, var(--accent)) 58%, var(--text-primary));
+}
+
+.service-badge-dot {
+  /* El punto sí conserva el color de marca puro: es decorativo. */
+  background: var(--svc-color, var(--accent));
+}

@@ -6,14 +6,6 @@ import ErrorBoundary from './components/ErrorBoundary.jsx'
 import './styles/globals.css'
 import './styles/toast.css'
 import './styles/themes.css'
-import { testToastSystem } from './utils/test-toast.js'
-import { diagnoseToastSystem } from './utils/diagnose-toast.js'
-
-// Hacer test y diagnóstico disponibles en DevTools (solo en dev)
-if (typeof window !== 'undefined') {
-  window.testToastSystem = testToastSystem
-  window.diagnoseToastSystem = diagnoseToastSystem
-}
 
 const isMini = window.location.hash === '#mini'
 const root = document.getElementById('root')

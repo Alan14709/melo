@@ -4,9 +4,11 @@ import { SERVICES } from '../../../services/registry'
 import { version } from '../../../package.json'
 import { usePlayerStore } from '../store/usePlayerStore'
 import { useToast } from '../hooks/useToast'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 import { logger } from '../utils/logger'
 import SettingsRow from './SettingsRow.jsx'
 import ThemeEditor from './ThemeEditor.jsx'
+import ResourceMonitor from './ResourceMonitor.jsx'
 import { applyTheme } from '../utils/applyTheme'
 
 const THEMES = ['dark', 'oled', 'light', 'nord', 'catppuccin', 'mono', 'liquid-glass', 'custom']
@@ -22,17 +24,24 @@ const THEME_LABELS = {
   custom: 'Custom',
 }
 
+// Pestañas con tablas o rejillas que no caben en el ancho normal del drawer.
+const WIDE_TABS = new Set(['rendimiento'])
+
 const SETTINGS_TABS = [
   { id: 'servicios',      label: 'Servicios' },
   { id: 'apariencia',     label: 'Apariencia' },
   { id: 'sistema',        label: 'Sistema' },
   { id: 'integraciones',  label: 'Integraciones' },
   { id: 'atajos',         label: 'Atajos' },
+  { id: 'rendimiento',    label: 'Rendimiento' },
   { id: 'datos',          label: 'Datos' },
 ]
 
 export default function SettingsPanel({ isOpen, onClose }) {
-  const [activeTab, setActiveTab] = React.useState('servicios')
+  const settingsTab = usePlayerStore((s) => s.settingsTab)
+  const setSettingsTab = usePlayerStore((s) => s.setSettingsTab)
+  const activeTab = settingsTab
+  const setActiveTab = setSettingsTab
   const { error: showError, success: showSuccess, info: showInfo } = useToast()
   const {
     notificationsEnabled,
@@ -69,8 +78,6 @@ export default function SettingsPanel({ isOpen, onClose }) {
     autoUpdateEnabled,
     setAutoUpdate,
     connectedServices,
-    playHistory,
-    clearPlayHistory,
   } = usePlayerStore()
 
   const [discordConnected, setDiscordConnected] = useState(false)
@@ -82,6 +89,28 @@ export default function SettingsPanel({ isOpen, onClose }) {
   const [startMinimized, setStartMinimized] = useState(true)
   const [pendingClearConfirm, setPendingClearConfirm] = useState(false)
   const clearConfirmTimerRef = useRef(null)
+  const panelRef = useRef(null)
+
+  useFocusTrap(panelRef, isOpen)
+
+  // Patron ARIA de tabs: una sola parada de tabulacion para las seis pestañas,
+  // y flechas para moverse entre ellas.
+  const handleTabsKeyDown = (event) => {
+    const delta = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
+    const jumpTo = event.key === 'Home' ? 0 : event.key === 'End' ? SETTINGS_TABS.length - 1 : null
+
+    if (!delta && jumpTo === null) return
+    event.preventDefault()
+
+    const currentIndex = SETTINGS_TABS.findIndex((tab) => tab.id === activeTab)
+    const nextIndex = jumpTo !== null
+      ? jumpTo
+      : (currentIndex + delta + SETTINGS_TABS.length) % SETTINGS_TABS.length
+
+    const nextTab = SETTINGS_TABS[nextIndex]
+    setActiveTab(nextTab.id)
+    panelRef.current?.querySelector(`#settings-tab-${nextTab.id}`)?.focus()
+  }
 
   useEffect(() => {
     return () => {
@@ -144,15 +173,29 @@ export default function SettingsPanel({ isOpen, onClose }) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [isOpen, onClose])
 
-  const handleExport = () => {
-    const payload = JSON.stringify(playHistory, null, 2)
-    const blob = new Blob([payload], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'melo-history.json'
-    a.click()
-    URL.revokeObjectURL(url)
+  const handleExport = async () => {
+    // Antes exportaba `playHistory` del store: un array en memoria que se
+    // vaciaba en cada arranque, asi que el archivo salia casi siempre vacio.
+    // El historial real y persistente vive en main.
+    try {
+      const payload = await window.melo.stats.export()
+      if (!payload) {
+        showError('No hay historial que exportar todavía.')
+        return
+      }
+
+      const blob = new Blob([payload], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `melo-history-${new Date().toISOString().split('T')[0]}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+      showSuccess('Historial exportado')
+    } catch (err) {
+      logger.error('History export failed', err)
+      showError('No se pudo exportar el historial')
+    }
   }
 
   const handleClearStats = async () => {
@@ -171,7 +214,6 @@ export default function SettingsPanel({ isOpen, onClose }) {
 
     try {
       await window.melo.stats.clear()
-      clearPlayHistory()
       logger.info('Estadísticas borradas')
       showSuccess('Estadísticas borradas correctamente')
     } catch (err) {
@@ -450,16 +492,30 @@ export default function SettingsPanel({ isOpen, onClose }) {
     <>
       <div className={`settings-overlay ${isOpen ? 'show' : ''}`} onClick={onClose} />
 
-      <aside className={`settings-panel ${isOpen ? 'open animate-slide-up' : ''}`}>
+      <aside
+        ref={panelRef}
+        className={`settings-panel ${isOpen ? 'open animate-slide-up' : ''} ${WIDE_TABS.has(activeTab) ? 'settings-panel-wide' : ''}`}
+        role="dialog"
+        aria-modal={isOpen || undefined}
+        aria-label="Ajustes"
+        aria-hidden={!isOpen || undefined}
+      >
         <header>
           <h2>Ajustes</h2>
-          <button onClick={onClose}><X size={18} /></button>
+          <button onClick={onClose} aria-label="Cerrar ajustes" title="Cerrar">
+            <X size={18} aria-hidden="true" />
+          </button>
         </header>
 
-        <nav className="settings-tabs">
+        <nav className="settings-tabs" role="tablist" aria-label="Secciones de ajustes" onKeyDown={handleTabsKeyDown}>
           {SETTINGS_TABS.map((tab) => (
             <button
               key={tab.id}
+              id={`settings-tab-${tab.id}`}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              aria-controls="settings-tabpanel"
+              tabIndex={activeTab === tab.id ? 0 : -1}
               className={`settings-tab ${activeTab === tab.id ? 'active' : ''}`}
               onClick={() => setActiveTab(tab.id)}
             >
@@ -468,7 +524,13 @@ export default function SettingsPanel({ isOpen, onClose }) {
           ))}
         </nav>
 
-        <div className="settings-content">
+        <div
+          className="settings-content"
+          id="settings-tabpanel"
+          role="tabpanel"
+          aria-labelledby={`settings-tab-${activeTab}`}
+          tabIndex={0}
+        >
           {activeTab === 'servicios' && (
           <section className="settings-section-card">
             <h3 className="settings-section-title">SERVICIOS</h3>
@@ -746,6 +808,17 @@ export default function SettingsPanel({ isOpen, onClose }) {
             <SettingsRow label="Play / Pause"     type="shortcut" value="Espacio" />
             <SettingsRow label="Cerrar overlay"   type="shortcut" value="Escape" />
             <SettingsRow label="Teclas multimedia" type="shortcut" value="MediaPlay / Next / Prev" />
+          </section>
+          )}
+
+          {activeTab === 'rendimiento' && (
+          <section className="settings-section-card">
+            <h3 className="settings-section-title">RECURSOS</h3>
+            <p className="settings-section-hint">
+              Cada servicio corre en su propio proceso. Si Melo va lento, aquí se ve cuál lo está
+              cargando.
+            </p>
+            <ResourceMonitor isVisible={isOpen && activeTab === 'rendimiento'} />
           </section>
           )}
 

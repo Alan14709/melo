@@ -1,12 +1,26 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { SERVICES } from '../../../services/registry'
 import ServiceCard from './ServiceCard.jsx'
+import WindowControls from './WindowControls.jsx'
 import { usePlayerStore } from '../store/usePlayerStore'
+import { useToast } from '../hooks/useToast'
 
 export default function ServicePicker({ onSelect }) {
   const [connectedIds, setConnectedIds] = useState([])
   const setConnectedServices = usePlayerStore((s) => s.setConnectedServices)
-  const services = Object.values(SERVICES)
+  const { error: showError } = useToast()
+
+  // Los servicios con sesion abierta van primero: son los unicos que el usuario
+  // puede abrir sin volver a iniciar sesion.
+  const services = useMemo(() => {
+    const all = Object.values(SERVICES)
+    if (connectedIds.length === 0) return all
+    return [...all].sort((a, b) => {
+      const aConnected = connectedIds.includes(a.id) ? 0 : 1
+      const bConnected = connectedIds.includes(b.id) ? 0 : 1
+      return aConnected - bConnected
+    })
+  }, [connectedIds])
 
   useEffect(() => {
     window.melo.getConnectedServices()
@@ -15,25 +29,16 @@ export default function ServicePicker({ onSelect }) {
         setConnectedIds(normalized)
         setConnectedServices(normalized)
       })
-      .catch(() => {})
-  }, [setConnectedServices])
+      .catch(() => {
+        // Antes era un catch vacio: el usuario veia todo como desconectado
+        // sin saber por que.
+        showError('No se pudieron leer tus sesiones guardadas.')
+      })
+  }, [setConnectedServices, showError])
 
   return (
     <div className="service-picker drag-region">
-      <div className="picker-window-controls no-drag">
-        <button
-          className="window-btn window-btn-close"
-          onClick={() => window.melo.windowAction('close')}
-        />
-        <button
-          className="window-btn window-btn-minimize"
-          onClick={() => window.melo.windowAction('minimize')}
-        />
-        <button
-          className="window-btn window-btn-maximize"
-          onClick={() => window.melo.windowAction('maximize-toggle')}
-        />
-      </div>
+      <WindowControls className="picker-window-controls" />
 
       <div className="picker-header no-drag">
         <h1 className="melo-logo">melo</h1>
@@ -51,6 +56,7 @@ export default function ServicePicker({ onSelect }) {
             className="animate-spring-in"
             style={{ animationDelay: `${index * 60}ms` }}
             isConnected={connectedIds.includes(service.id)}
+            autoFocus={index === 0 && connectedIds.includes(service.id)}
           />
         ))}
       </div>

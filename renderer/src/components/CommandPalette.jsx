@@ -1,9 +1,11 @@
 import React, { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 const GROUP_LABELS = {
   services: 'Servicios',
   playback: 'Reproducción',
   navigation: 'Navegación',
+  timer: 'Temporizador',
   ui: 'Interfaz',
 }
 
@@ -11,7 +13,11 @@ function CommandPalette({ isOpen, onClose, actions = [] }) {
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef(null)
-  const previousFocusRef = useRef(null)
+  const panelRef = useRef(null)
+  const listRef = useRef(null)
+
+  // autoFocus off: el palette ya enfoca su propio input mas abajo.
+  useFocusTrap(panelRef, isOpen, { autoFocus: false })
 
   const filteredActions = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -33,7 +39,6 @@ function CommandPalette({ isOpen, onClose, actions = [] }) {
 
   useEffect(() => {
     if (!isOpen) return
-    previousFocusRef.current = document.activeElement
     setQuery('')
     setSelectedIndex(0)
     const rafId = window.requestAnimationFrame(() => {
@@ -43,15 +48,20 @@ function CommandPalette({ isOpen, onClose, actions = [] }) {
     return () => window.cancelAnimationFrame(rafId)
   }, [isOpen])
 
-  useEffect(() => {
-    if (isOpen) return
-    previousFocusRef.current?.focus?.()
-  }, [isOpen])
+  // La restauracion del foco al cerrar la hace useFocusTrap.
 
   useEffect(() => {
     if (selectedIndex <= filteredActions.length - 1) return
     setSelectedIndex(0)
   }, [filteredActions, selectedIndex])
+
+  // Con la lista llena, navegar con flechas sacaba la seleccion de la vista.
+  useEffect(() => {
+    if (!isOpen) return
+    listRef.current
+      ?.querySelector('[aria-selected="true"]')
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [isOpen, selectedIndex])
 
   const runAction = (item) => {
     if (!item?.action) return
@@ -87,7 +97,15 @@ function CommandPalette({ isOpen, onClose, actions = [] }) {
 
   return (
     <div className="cmdk-overlay" onClick={onClose}>
-      <div className="cmdk-panel" onClick={(e) => e.stopPropagation()} onKeyDown={onKeyDown}>
+      <div
+        ref={panelRef}
+        className="cmdk-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Paleta de comandos"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={onKeyDown}
+      >
         <div className="cmdk-search-row">
           <svg className="cmdk-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
@@ -99,25 +117,44 @@ function CommandPalette({ isOpen, onClose, actions = [] }) {
             className="cmdk-input"
             placeholder="Buscar acciones…"
             aria-label="Buscar acciones"
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="cmdk-listbox"
+            aria-autocomplete="list"
+            aria-activedescendant={
+              filteredActions[selectedIndex]
+                ? `cmdk-option-${filteredActions[selectedIndex].id}`
+                : undefined
+            }
           />
           <kbd className="cmdk-esc-hint">Esc</kbd>
         </div>
 
-        <div className="cmdk-list" role="listbox" aria-label="Acciones">
+        <div
+          ref={listRef}
+          id="cmdk-listbox"
+          className="cmdk-list"
+          role="listbox"
+          aria-label="Acciones"
+        >
           {filteredActions.length === 0 && (
             <p className="cmdk-empty">Sin resultados para "{query}"</p>
           )}
 
           {groupedActions
             ? Object.entries(groupedActions).map(([groupKey, items]) => (
-                <div key={groupKey} className="cmdk-group">
-                  <p className="cmdk-group-label">{GROUP_LABELS[groupKey] || groupKey}</p>
+                <div key={groupKey} className="cmdk-group" role="group" aria-label={GROUP_LABELS[groupKey] || groupKey}>
+                  <p className="cmdk-group-label" aria-hidden="true">{GROUP_LABELS[groupKey] || groupKey}</p>
                   {items.map((item) => {
                     const flatIndex = filteredActions.indexOf(item)
                     return (
                       <button
                         key={item.id}
+                        id={`cmdk-option-${item.id}`}
                         type="button"
+                        role="option"
+                        aria-selected={flatIndex === selectedIndex}
+                        tabIndex={-1}
                         className={`cmdk-item ${flatIndex === selectedIndex ? 'active' : ''}`}
                         onMouseEnter={() => setSelectedIndex(flatIndex)}
                         onMouseDown={(e) => e.preventDefault()}
@@ -133,7 +170,11 @@ function CommandPalette({ isOpen, onClose, actions = [] }) {
             : filteredActions.map((item, index) => (
                 <button
                   key={item.id}
+                  id={`cmdk-option-${item.id}`}
                   type="button"
+                  role="option"
+                  aria-selected={index === selectedIndex}
+                  tabIndex={-1}
                   className={`cmdk-item ${index === selectedIndex ? 'active' : ''}`}
                   onMouseEnter={() => setSelectedIndex(index)}
                   onMouseDown={(e) => e.preventDefault()}

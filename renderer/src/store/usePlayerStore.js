@@ -1,19 +1,9 @@
 import { create } from 'zustand'
 
-// Debounce para limitar updates frecuentes de progreso en la UI.
-let _progressTimeout = null
-const debouncedSetProgress = (set, value) => {
-  clearTimeout(_progressTimeout)
-  _progressTimeout = setTimeout(() => {
-    set({ progress: value })
-  }, 100)
-}
-
 export const usePlayerStore = create((set) => ({
   // Estado del player
   currentTrack: null,
   isPlaying: false,
-  progress: 0,
   volumeLevel: 1,
 
   // Servicios
@@ -26,6 +16,7 @@ export const usePlayerStore = create((set) => ({
   currentView: 'picker',
   pendingService: null,
   settingsOpen: false,
+  settingsTab: 'servicios',
   commandPaletteOpen: false,
   miniPlayerOpen: false,
   theme: 'dark',
@@ -51,7 +42,6 @@ export const usePlayerStore = create((set) => ({
   // Stats (v0.5)
   statsEnabled: true,
   autoUpdateEnabled: false,
-  playHistory: [],
 
   // Focus Mode
   focusMode: false,
@@ -68,8 +58,8 @@ export const usePlayerStore = create((set) => ({
   // Acciones
   setTrack: (track) => set({ currentTrack: track }),
   setPlaying: (v) => set({ isPlaying: v }),
-  // Actualizar progreso con debounce para evitar renderizado excesivo.
-  setProgress: (value) => debouncedSetProgress(set, value),
+  // El progreso lo lleva PlayerBar con estado local desde `player:getProgress`:
+  // en el store obligaba a re-renderizar el arbol entero cada segundo.
   setVolumeLevel: (v) => set({ volumeLevel: v }),
 
   setActiveService: (id, color, name) => set({
@@ -89,6 +79,9 @@ export const usePlayerStore = create((set) => ({
   setView: (view) => set({ currentView: view }),
   setPendingService: (service) => set({ pendingService: service }),
   setSettingsOpen: (v) => set({ settingsOpen: v }),
+  setSettingsTab: (settingsTab) => set({ settingsTab }),
+  // Abre el panel directamente en una pestaña, para las acciones del palette.
+  openSettingsAt: (settingsTab) => set({ settingsOpen: true, settingsTab }),
   setTheme: (theme) => set({ theme }),
   setAccentColor: (accentColor) => set({ accentColor }),
   setDynamicTheme: (v) => set({ dynamicThemeEnabled: v }),
@@ -107,7 +100,6 @@ export const usePlayerStore = create((set) => ({
   setOverlayPosition: (pos) => set({ overlayPosition: pos }),
   setStats: (v) => set({ statsEnabled: v }),
   setAutoUpdate: (v) => set({ autoUpdateEnabled: v }),
-  clearPlayHistory: () => set({ playHistory: [] }),
   setFocusMode: (v) => set({ focusMode: v }),
 
   hydrateSettings: (settings) => set((s) => ({
@@ -138,12 +130,5 @@ export const usePlayerStore = create((set) => ({
   // UI State management (Fase 1)
   setUIState: (feature, state) => set((s) => ({
     uiState: { ...s.uiState, [feature]: state }
-  })),
-
-  addToHistory: (track) => set((s) => ({
-    playHistory: [
-      { ...track, playedAt: Date.now() },
-      ...s.playHistory.slice(0, 999)
-    ]
   })),
 }))

@@ -263,9 +263,6 @@ contextBridge.exposeInMainWorld('melo', {
   onServiceActive: (cb) => {
     return subscribeIpc('service:active', (_e, data) => cb(data))
   },
-  onCommandPaletteToggle: (cb) => {
-    return subscribeIpc('command-palette:toggle', (_e, data) => cb(data))
-  },
   onShortcut: (cb) => {
     return subscribeIpc('shortcut:event', (_e, data) => cb(data))
   },
@@ -343,9 +340,22 @@ contextBridge.exposeInMainWorld('melo', {
       return safeInvoke('notification:show', { title, body, silent })
     },
   },
+  showNowPlayingMenu: (payload) => safeInvoke('menu:nowPlaying', payload),
+  system: {
+    getResourceUsage: () => safeInvoke('system:getResourceUsage'),
+    getDiagnostics: () => safeInvoke('system:getDiagnostics'),
+  },
+  sleepTimer: {
+    start: (minutes) => safeInvoke('sleepTimer:start', { minutes }),
+    cancel: () => safeInvoke('sleepTimer:cancel'),
+    getStatus: () => safeInvoke('sleepTimer:getStatus'),
+    onUpdate: (cb) => subscribeIpc('sleepTimer:update', (_e, data) => cb(data)),
+    onFired: (cb) => subscribeIpc('sleepTimer:fired', (_e, data) => cb(data)),
+  },
   stats: {
     getHistory: (opts) => safeInvoke('stats:getHistory', opts),
     getSummary: () => safeInvoke('stats:getSummary'),
+    getNowPlayingContext: (track) => safeInvoke('stats:getNowPlayingContext', track),
     getWrapped: (range) => safeInvoke('stats:getWrapped', range),
     export: () => safeInvoke('stats:export'),
     clear: () => safeInvoke('stats:clear'),

@@ -1,9 +1,15 @@
 import React, { memo } from 'react'
-import { Minus, Square, X, Settings, Music2 } from 'lucide-react'
+import { Settings, Music2 } from 'lucide-react'
+import { useShallow } from 'zustand/react/shallow'
 import { usePlayerStore } from '../store/usePlayerStore'
+import WindowControls from './WindowControls.jsx'
 
 function TopBar({ onSettingsOpen, immersive = false, onExitImmersive }) {
-  const { currentTrack, isPlaying } = usePlayerStore()
+  // Selector: sin el, usePlayerStore() suscribia la barra a todo el store y el
+  // memo() de abajo no servia de nada.
+  const { currentTrack, isPlaying } = usePlayerStore(
+    useShallow((s) => ({ currentTrack: s.currentTrack, isPlaying: s.isPlaying }))
+  )
 
   return (
     <div className="topbar drag-region">
@@ -16,7 +22,7 @@ function TopBar({ onSettingsOpen, immersive = false, onExitImmersive }) {
           />
         ) : (
           <div className="topbar-artwork placeholder">
-            <Music2 size={14} />
+            <Music2 size={14} aria-hidden="true" />
           </div>
         )}
         <div className="topbar-track-info topbar-info">
@@ -41,31 +47,13 @@ function TopBar({ onSettingsOpen, immersive = false, onExitImmersive }) {
         <button
           className="topbar-icon-btn"
           onClick={onSettingsOpen}
+          aria-label="Abrir ajustes"
           title="Ajustes"
         >
-          <Settings size={14} />
+          <Settings size={14} aria-hidden="true" />
         </button>
 
-        <div className="topbar-window-controls">
-          <button
-            className="topbar-icon-btn"
-            onClick={() => window.melo.windowAction('minimize')}
-          >
-            <Minus size={12} />
-          </button>
-          <button
-            className="topbar-icon-btn"
-            onClick={() => window.melo.windowAction('maximize-toggle')}
-          >
-            <Square size={11} />
-          </button>
-          <button
-            className="topbar-icon-btn topbar-close"
-            onClick={() => window.melo.windowAction('close')}
-          >
-            <X size={13} />
-          </button>
-        </div>
+        <WindowControls className="topbar-window-controls" />
       </div>
     </div>
   )

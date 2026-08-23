@@ -5,12 +5,20 @@
  */
 
 import React, { useEffect, useRef, useState, memo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { usePlayerStore } from '../store/usePlayerStore'
-import { extractColors, hexToRgba, darkenColor } from '../utils/extractColors'
+import { getArtworkPalette, hexToRgba, darkenColor } from '../utils/artworkPalette'
 import { applyDynamicAccent } from '../utils/applyTheme'
 
 const ArtworkGradient = memo(function ArtworkGradient({ opacity = 1 }) {
-  const { currentTrack, isPlaying, dynamicThemeEnabled, setAccentColor } = usePlayerStore()
+  const { currentTrack, isPlaying, dynamicThemeEnabled, setAccentColor } = usePlayerStore(
+    useShallow((s) => ({
+      currentTrack: s.currentTrack,
+      isPlaying: s.isPlaying,
+      dynamicThemeEnabled: s.dynamicThemeEnabled,
+      setAccentColor: s.setAccentColor,
+    }))
+  )
   const artwork = currentTrack?.artwork || currentTrack?.artworkUrl || null
 
   const [colors, setColors] = useState({
@@ -26,7 +34,12 @@ const ArtworkGradient = memo(function ArtworkGradient({ opacity = 1 }) {
     if (!artwork || artwork === prevArtwork.current) return
     prevArtwork.current = artwork
 
-    extractColors(artwork, 24).then(({ vibrant, dominant, muted, palette }) => {
+    let cancelled = false
+    let resetTimer = null
+
+    getArtworkPalette(artwork).then((result) => {
+      if (cancelled || !result) return
+      const { vibrant, dominant, muted, palette } = result.gradient
       setTransitioning(true)
       setColors({
         c1: darkenColor(vibrant, 0.25),
@@ -40,8 +53,13 @@ const ArtworkGradient = memo(function ArtworkGradient({ opacity = 1 }) {
         applyDynamicAccent(vibrant)
         setAccentColor(vibrant)
       }
-      setTimeout(() => setTransitioning(false), 1200)
+      resetTimer = setTimeout(() => setTransitioning(false), 1200)
     })
+
+    return () => {
+      cancelled = true
+      clearTimeout(resetTimer)
+    }
   }, [artwork, dynamicThemeEnabled, setAccentColor])
 
   return (

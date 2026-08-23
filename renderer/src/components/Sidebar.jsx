@@ -28,7 +28,7 @@ export default function Sidebar() {
     <aside className="sidebar">
       <div className="sidebar-section">
         <p className="sidebar-section-label">
-          <Music2 size={10} style={{ display: 'inline', marginRight: 4 }} />
+          <Music2 size={10} style={{ display: 'inline', marginRight: 4 }} aria-hidden="true" />
           Servicios
         </p>
         <div className="sidebar-list">
@@ -38,14 +38,19 @@ export default function Sidebar() {
               className={`sidebar-service-item sidebar-item-enter ${activeServiceId === service.id ? 'active' : ''}`}
               style={{ '--service-color': service.color, animationDelay: `${index * 40}ms` }}
               onClick={() => handleServiceClick(service)}
+              aria-current={activeServiceId === service.id ? 'true' : undefined}
               title={service.name}
             >
               <span
                 className={`service-dot ${isPlaying && activeServiceId === service.id ? 'playing' : ''}`}
+                aria-hidden="true"
               />
               <span className="sidebar-item-label">{service.name}</span>
               {activeServiceId === service.id && isPlaying && (
-                <span className="sidebar-now-playing-pip" />
+                <>
+                  <span className="sidebar-now-playing-pip" aria-hidden="true" />
+                  <span className="sr-only">— reproduciendo</span>
+                </>
               )}
             </button>
           ))}
@@ -61,8 +66,9 @@ export default function Sidebar() {
             className={`sidebar-melo-item sidebar-item-enter ${currentView === 'stats' ? 'active' : ''}`}
             style={{ animationDelay: `${list.length * 40}ms` }}
             onClick={() => setView('stats')}
+            aria-current={currentView === 'stats' ? 'page' : undefined}
           >
-            <BarChart2 size={14} className="sidebar-item-icon" />
+            <BarChart2 size={14} className="sidebar-item-icon" aria-hidden="true" />
             <span className="sidebar-item-label">Estadísticas</span>
           </button>
           <button
@@ -70,16 +76,17 @@ export default function Sidebar() {
             style={{ animationDelay: `${(list.length + 1) * 40}ms` }}
             onClick={() => window.melo.miniToggle()}
           >
-            <PictureInPicture size={14} className="sidebar-item-icon" />
+            <PictureInPicture size={14} className="sidebar-item-icon" aria-hidden="true" />
             <span className="sidebar-item-label">Mini Player</span>
           </button>
           <button
             className={`sidebar-melo-item sidebar-item-enter ${focusMode ? 'active focus-active' : ''}`}
             style={{ animationDelay: `${(list.length + 2) * 40}ms` }}
             onClick={() => setFocusMode(!focusMode)}
+            aria-pressed={focusMode}
             title={focusMode ? 'Salir de Focus Mode' : 'Activar Focus Mode'}
           >
-            <Focus size={14} className="sidebar-item-icon" />
+            <Focus size={14} className="sidebar-item-icon" aria-hidden="true" />
             <span className="sidebar-item-label">Focus</span>
             {focusMode && <span className="sidebar-focus-badge">ON</span>}
           </button>

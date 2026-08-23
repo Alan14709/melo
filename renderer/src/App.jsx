@@ -1,22 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { usePlayerStore } from './store/usePlayerStore'
+import { useToast } from './hooks/useToast'
 import ServicePicker from './components/ServicePicker.jsx'
 import LoginView from './components/LoginView.jsx'
-import TopBar from './components/TopBar.jsx'
-import Sidebar from './components/Sidebar.jsx'
-import PlayerBar from './components/PlayerBar.jsx'
-import SettingsPanel from './components/SettingsPanel.jsx'
-import CommandPalette from './components/CommandPalette.jsx'
+import AppShell from './components/AppShell.jsx'
+import BrowserPlaceholder from './components/BrowserPlaceholder.jsx'
 import StatsView from './components/StatsView.jsx'
 import UpdateBanner from './components/UpdateBanner.jsx'
 import OfflineBanner from './components/OfflineBanner.jsx'
 import FallbackControls from './components/FallbackControls.jsx'
 import ToastManager from './components/ToastManager.jsx'
+import SleepTimerPill from './components/SleepTimerPill.jsx'
 import ArtworkGradient from './components/ArtworkGradient.jsx'
 import { getUISafeMode } from './hooks/useUISafeMode'
 import { logger } from './utils/logger'
 import { SERVICES } from '../../services/registry'
-import { extractPalette } from './utils/colorExtractor'
+import { getArtworkPalette } from './utils/artworkPalette'
 import { applyTheme, applyDynamicPalette } from './utils/applyTheme'
 import './styles/artwork-gradient.css'
 
@@ -35,23 +35,44 @@ export default function App() {
     commandPaletteOpen: false,
     immersive: false,
   })
+  // useShallow en vez de usePlayerStore(): sin selector, App se re-renderizaba
+  // con CUALQUIER cambio del store — incluido cada update de metadata y cada
+  // movimiento del volumen. Aqui solo entran los campos que el shell necesita.
   const {
     currentView, setView,
     pendingService, setPendingService,
     setTrack, setPlaying,
     setActiveService, addConnectedService,
     settingsOpen, setSettingsOpen,
-    addToHistory, statsEnabled,
-    commandPaletteOpen,
-    setCommandPaletteOpen,
-    theme,
-    setTheme,
-    hydrateSettings,
-    setAccentColor,
+    commandPaletteOpen, setCommandPaletteOpen,
+    theme, setTheme,
+    hydrateSettings, setAccentColor,
     activeServiceColor,
-    focusMode,
-    setFocusMode,
-  } = usePlayerStore()
+    focusMode, setFocusMode,
+  } = usePlayerStore(
+    useShallow((s) => ({
+      currentView: s.currentView,
+      setView: s.setView,
+      pendingService: s.pendingService,
+      setPendingService: s.setPendingService,
+      setTrack: s.setTrack,
+      setPlaying: s.setPlaying,
+      setActiveService: s.setActiveService,
+      addConnectedService: s.addConnectedService,
+      settingsOpen: s.settingsOpen,
+      setSettingsOpen: s.setSettingsOpen,
+      commandPaletteOpen: s.commandPaletteOpen,
+      setCommandPaletteOpen: s.setCommandPaletteOpen,
+      theme: s.theme,
+      setTheme: s.setTheme,
+      hydrateSettings: s.hydrateSettings,
+      setAccentColor: s.setAccentColor,
+      activeServiceColor: s.activeServiceColor,
+      focusMode: s.focusMode,
+      setFocusMode: s.setFocusMode,
+    }))
+  )
+  const { info: showInfo, error: showError } = useToast()
   const uiSafe = useMemo(() => getUISafeMode(gpuStatus), [gpuStatus])
 
   const servicesList = useMemo(() => Object.values(SERVICES), [])
@@ -72,10 +93,18 @@ export default function App() {
       return
     }
 
-    window.melo.switchService(service.id, service.url, service)
+    try {
+      window.melo.switchService(service.id, service.url, service)
+      showInfo(`Cambiando a ${service.name}…`)
+    } catch (err) {
+      logger.error('Service switch failed', err)
+      showError(`No se pudo abrir ${service.name}. Revisa tu conexión.`)
+      return
+    }
+
     setActiveService(service.id, service.color, service.name)
     setView('player')
-  }, [setActiveService, setView])
+  }, [setActiveService, setView, showError, showInfo])
 
   const commandActions = useMemo(() => ([
     { id: 'apple',   label: 'Apple Music',  group: 'services', hint: '⌘1', action: () => handleSwitchService(SERVICES.appleMusic) },
@@ -100,7 +129,50 @@ export default function App() {
       action: () => setFocusMode(!focusMode),
     },
     { id: 'stats',    label: 'Ver Estadísticas',   group: 'navigation', action: () => setView('stats') },
-  ]), [handleSwitchService, immersive, focusMode, setFocusMode, setSettingsOpen, setView])
+    {
+      id: 'resources',
+      label: 'Ver uso de recursos',
+      group: 'navigation',
+      action: () => usePlayerStore.getState().openSettingsAt('rendimiento'),
+    },
+    {
+      id: 'copy-track',
+      label: 'Copiar canción actual',
+      group: 'playback',
+      action: async () => {
+        const { currentTrack } = usePlayerStore.getState()
+        if (!currentTrack?.title) {
+          showError('No hay ninguna canción sonando')
+          return
+        }
+        const text = [currentTrack.title, currentTrack.artist].filter(Boolean).join(' — ')
+        try {
+          await navigator.clipboard.writeText(text)
+          showInfo(`Copiado: ${text}`)
+        } catch (_) {
+          showError('No se pudo copiar al portapapeles')
+        }
+      },
+    },
+    ...[15, 30, 60].map((minutes) => ({
+      id: `sleep-${minutes}`,
+      label: `Dormir en ${minutes} min`,
+      group: 'timer',
+      action: () => {
+        window.melo.sleepTimer.start(minutes)
+        showInfo(`La música se pausará en ${minutes} min`)
+      },
+    })),
+    {
+      id: 'sleep-cancel',
+      label: 'Cancelar temporizador',
+      group: 'timer',
+      action: () => {
+        window.melo.sleepTimer.cancel()
+        showInfo('Temporizador cancelado')
+      },
+    },
+  ]), [handleSwitchService, immersive, focusMode, setFocusMode, setSettingsOpen, setView, showError, showInfo])
 
   // Cargar preferencias persistidas desde el proceso principal.
   useEffect(() => {
@@ -131,11 +203,12 @@ export default function App() {
         }
       } catch (err) {
         logger.warn('Init failed, using defaults', err)
+        showError('No se pudieron cargar tus preferencias. Usando valores por defecto.')
       }
     }
 
     init()
-  }, [hydrateSettings, setAccentColor, setTheme])
+  }, [hydrateSettings, setAccentColor, setTheme, showError])
 
   // Escuchar metadata enviada por el preload del BrowserView.
   useEffect(() => {
@@ -169,11 +242,8 @@ export default function App() {
         setPlaying(nextPlaying)
       }
 
-      // Leer estado actual desde store para evitar cierres obsoletos.
-      const store = usePlayerStore.getState()
-      if (store.statsEnabled && data.title) {
-        store.addToHistory(data)
-      }
+      // El historial lo registra main en `trackPlay()`, con listenedMs real y
+      // persistencia. El renderer ya no lleva una copia propia en memoria.
 
       // Debounce de metadata visual para bajar costo de extraccion de color.
       clearTimeout(metadataDebounceRef.current)
@@ -195,10 +265,12 @@ export default function App() {
         lastThemeArtworkRef.current = data.artwork
 
         try {
-          const palette = await extractPalette(data.artwork)
-          if (palette) {
-            applyDynamicPalette(palette)
-            setAccentColor(palette.accent)
+          // Mismo modulo (y misma cache) que usa ArtworkGradient: una sola
+          // decodificacion de la imagen para los dos consumidores.
+          const result = await getArtworkPalette(data.artwork)
+          if (result?.theme) {
+            applyDynamicPalette(result.theme)
+            setAccentColor(result.theme.accent)
           }
         } catch (_) {
           // En caso de error, reaplique el tema base para evitar colores corruptos
@@ -356,15 +428,12 @@ export default function App() {
     setPendingService(null)
   }, [pendingService, setPendingService, setView])
 
-  const renderSidebarRail = useCallback(() => (
-    <div className="sidebar-rail">
-      <Sidebar />
-      <div className="sidebar-status-section" aria-label="Estado y notificaciones">
-        <FallbackControls health={healthStatus} fallbackStatus={fallbackStatus} />
-        <OfflineBanner />
-        <UpdateBanner />
-      </div>
-    </div>
+  const statusSlot = useMemo(() => (
+    <>
+      <FallbackControls health={healthStatus} fallbackStatus={fallbackStatus} />
+      <OfflineBanner />
+      <UpdateBanner />
+    </>
   ), [fallbackStatus, healthStatus])
 
   return (
@@ -376,6 +445,7 @@ export default function App() {
       />
       <ArtworkGradient opacity={0.85} />
       <ToastManager />
+      <SleepTimerPill />
 
       {currentView === 'picker' && (
         <ServicePicker onSelect={handleSelectService} />
@@ -389,58 +459,28 @@ export default function App() {
         />
       )}
 
-      {currentView === 'player' && (
-        <div className={`player-layout ${immersive ? 'immersive-mode' : ''}`}>
-          <TopBar
-            onSettingsOpen={() => setSettingsOpen(true)}
-            immersive={immersive}
-            onExitImmersive={() => setImmersive(false)}
-          />
-          <div className="player-body">
-            <div className={`sidebar-shell ${immersive ? 'immersive-hidden' : ''}`}>
-              {renderSidebarRail()}
-            </div>
-            <div className="browser-area">
-              {settingsOpen && (
-                <div className="browser-placeholder">
-                  <p>Ajustes abiertos</p>
-                </div>
-              )}
-            </div>
-          </div>
-          <PlayerBar />
-          <SettingsPanel
-            isOpen={settingsOpen}
-            onClose={() => setSettingsOpen(false)}
-          />
-          <CommandPalette
-            isOpen={commandPaletteOpen}
-            onClose={() => setCommandPaletteOpen(false)}
-            actions={commandActions}
-          />
-        </div>
-      )}
-
-      {currentView === 'stats' && (
-        <div className="player-layout">
-          <TopBar onSettingsOpen={() => setSettingsOpen(true)} immersive={false} />
-          <div className="player-body">
-            <div className="sidebar-shell">
-              {renderSidebarRail()}
-            </div>
+      {(currentView === 'player' || currentView === 'stats') && (
+        <AppShell
+          immersive={currentView === 'player' && immersive}
+          onSettingsOpen={() => setSettingsOpen(true)}
+          onExitImmersive={() => setImmersive(false)}
+          statusSlot={statusSlot}
+          settingsOpen={settingsOpen}
+          onSettingsClose={() => setSettingsOpen(false)}
+          commandPaletteOpen={commandPaletteOpen}
+          onCommandPaletteClose={() => setCommandPaletteOpen(false)}
+          commandActions={commandActions}
+        >
+          {currentView === 'stats' ? (
             <StatsView />
-          </div>
-          <PlayerBar />
-          <SettingsPanel
-            isOpen={settingsOpen}
-            onClose={() => setSettingsOpen(false)}
-          />
-          <CommandPalette
-            isOpen={commandPaletteOpen}
-            onClose={() => setCommandPaletteOpen(false)}
-            actions={commandActions}
-          />
-        </div>
+          ) : (
+            <div className="browser-area">
+              {/* El BrowserView se esconde con cualquier overlay: rellenar el
+                  hueco con lo que suena en vez de dejarlo en negro. */}
+              {settingsOpen && <BrowserPlaceholder />}
+            </div>
+          )}
+        </AppShell>
       )}
     </div>
   )
